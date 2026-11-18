@@ -70,8 +70,14 @@ DeepSeek 38/39 `skill` against 39/39 `typed-python`, and GLM 58/60 against
 53/60. Agentica cost 1.8 times (DeepSeek) and 3.1 times (GLM) as much per run.
 No run called the query commands.
 
-With 3 reps per cell these are directions, not claims. The findings of every
-round, what the results do not show, and the diagnostics are in
+Rounds 14 and 15 (2026-11-18, 1 rep) added Go and larger tree tasks. Every arm
+passed every case, adversarial included. Agentica took about twice the turns,
+cost 2.3 to 3.7 times more on small tasks and the same as typed Python on the
+larger ones, and was the fastest arm on t27. The conclusions are in
+[docs/results.md](docs/results.md#conclusions).
+
+With 1 to 3 reps per cell these are directions, not claims. The findings of
+every round, what the results do not show, and the diagnostics are in
 [docs/results.md](docs/results.md).
 
 ## Docs
@@ -81,5 +87,5 @@ round, what the results do not show, and the diagnostics are in
 | [docs/arms.md](docs/arms.md) | the arms, the prompts, the Agentica under test, the typed Python, Go and no-CLI arms |
 | [docs/tasks.md](docs/tasks.md) | the tasks, the ecosystem tasks, the hidden cases, the tree tasks and the case tiers |
 | [docs/running.md](docs/running.md) | the options, the Docker sandbox, the measures, the budget cap, the preflight and before a round |
-| [docs/results.md](docs/results.md) | the findings of rounds 1 to 13, what the results do not show, the diagnostics |
+| [docs/results.md](docs/results.md) | the findings of rounds 1 to 15 and the conclusions, what the results do not show, the diagnostics |
 | [docs/benchmarks.md](docs/benchmarks.md) | the benchmark twins: `make bench` and its runners |

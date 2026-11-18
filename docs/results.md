@@ -36,10 +36,72 @@ claims; the raw tables are in git history.
   with 4.7 and 4.8 times the context. Input and cache reads are 75% and 81% of
   the extra cost, so the context, not the output, is what to cut.
 
+## Round 14 (R1): Go and the ecosystem tasks (2026-11-18)
+
+Agentica 0.34.1 against typed Python and Go, 1 rep, about $0.80 for 123 runs.
+DeepSeek V4.1 flash ran 23 tasks, GLM 5.3 flash ran 11 of them (t6, t8, t10,
+t16 to t23).
+
+| Model | Arm | Pass | $/run | Turns/run |
+|---|---|---|---|---|
+| DeepSeek | `skill` | 23/23 | 0.0088 | 11.5 |
+| DeepSeek | `typed-python` | 22/23 | 0.0038 | 5.7 |
+| DeepSeek | `go` | 23/23 | 0.0039 | 6.0 |
+| GLM | `skill` | 10/11 | 0.0145 | 17.4 |
+| GLM | `typed-python` | 10/11 | 0.0039 | 7.8 |
+| GLM | `go` | 11/11 | 0.0057 | 9.9 |
+
+- **Pass rates are at the ceiling** for every arm, so the round cannot show a
+  quality difference.
+- **Agentica costs 2.3 to 3.7 times more per run** and takes about twice the
+  turns. On the ecosystem tasks (t21 to t23, with packages) it is about 3.5
+  times the cost and 3 to 4 times the turns.
+- **Where the extra turns go** (DeepSeek, per run): about 2.4 reads of the skill
+  and docs, 1.5 greps over them, 5.5 self-test calls against 1.1, and 0.57 fix
+  rounds against nearly none. The cached context is about 9 times larger.
+- **Time** is about 75% model output; grading takes about 5 s.
+- The baselines get no docs, so the cost gap includes learning the language.
+
+## Round 15 (R2): larger tree tasks (2026-11-18)
+
+Main 9835239, DeepSeek V4.1 flash, 1 rep, 4 arms, 6 tasks (t8, t16, t18, t21,
+and the larger tree tasks t25 and t27 with adversarial cases), 24 runs, $0.72.
+
+| Arm | Pass | Cases | Adversarial | $/run | Turns/run | s/run |
+|---|---|---|---|---|---|---|
+| `skill` | 6/6 | 119/119 | 24/24 | 0.036 | 30.0 | 441 |
+| `typed-python` | 6/6 | 119/119 | 24/24 | 0.036 | 19.5 | 410 |
+| `python` | 6/6 | 119/119 | 24/24 | 0.027 | 14.5 | 474 |
+| `go` | 6/6 | 119/119 | 24/24 | 0.021 | 15.7 | 401 |
+
+- **Larger tasks do not separate the arms either.** Every arm passed every
+  hidden case, adversarial included, with no crash and no hygiene failure.
+- **Agentica was the slowest on t25 and the fastest on t27.** On t25 it took
+  about twice the time (1076 s against 475 to 557) and 3 to 4 times the turns.
+  On t27 it finished first (970 s against 1219 to 1918), and its cost was
+  below `typed-python` and `python`.
+- **The `skill` arm costs the same per run as `typed-python`** at about twice
+  the turns; `go` is the cheapest.
+- **The `skill` arm ran its own spec least:** 2 times in all, against 12 to 14.
+- **Typed Python escaped its checker** 9 times on t25 and 3 times on t18.
+
+## Conclusions
+
+- With the cheap models tried, every arm reaches the ceiling on these tasks,
+  small or large. The evals measure the cost of a language an agent does not
+  know, not a quality edge.
+- That cost has come down: from about 4 times the tokens of Python (round 1) to
+  the same cost per run as typed Python on the larger tasks (round 15). The
+  extra turns are mostly reading the skill and the docs.
+- Agentica is not slower to finish once a task is large: the fastest arm on t27.
+- A quality edge, if any, would need tasks that fail often in the baselines, or
+  models that fail more. Neither showed up in these rounds.
+- No blog post is planned from these numbers; they live here.
+
 ## What the results do not show
 
-- Accuracy on harder tasks. These tasks do not need sorting or building a list,
-  and most of them pass.
+- Accuracy on tasks the baselines fail. Even the larger tree tasks of round 15
+  pass in every arm.
 - Strong models. Only small and cheap ones ran (DeepSeek, GLM, gpt-oss, and
   Nemotron in part).
 - Whether `--ai` or `--json` help. They were not measured.
