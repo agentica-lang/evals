@@ -402,6 +402,11 @@ files), and lists the tasks of each arm.
   the list price: it does not count OpenCode Go's double price on weekday
   hours (01:00 to 04:00 and 06:00 to 10:00 UTC) or the allowance of the plan.
   `run.json` has `started_utc` for that reason.
+- A run whose agent passes `--timeout` has `status: timeout` and
+  `failure: agent-timeout`, whatever its file grades (the cases it passes stay
+  in `passed`). It keeps the transcript and the cost of the turns Pi finished;
+  the request still open when it was killed reports nothing, so its
+  `cost_source` ends in `-partial` and the cost is a lower bound.
 - `fix_rounds` counts failed check or run calls (the calls of
   `interpreter_runs`) that an edit follows before the next check or run call:
   Pi's `edit` or `write` tool on a `solution.*` file without an error, or a
