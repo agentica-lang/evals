@@ -51,7 +51,8 @@ GO_VET = ["go", "vet", "solution.go"]
 GO_BUILD = ["go", "build", "-gcflags=-e", "-o", "solution", "solution.go"]
 GO_FILE_ERROR = re.compile(r"^(?:vet: )?\S+\.go:\d+(?::\d+)?: ", re.MULTILINE)
 NET_STRONG = re.compile(r"\bwget\b|\bgit\s+clone\b|github\.com|\bpip3?\s+install\b|\bnpm\b|\bapt(?:-get)?\b"
-                        r"|\bgo\s+(?:-C\s+\S+\s+)?(?:get|install|mod\s+download)\b|\bGOPROXY=|golang\.org")
+                        r"|\bgo\s+(?:-C\s+\S+\s+)?(?:get|install|mod\s+(?:download|tidy))\b|\bGOPROXY=|golang\.org"
+                        r"|\S+@(?:v\d|latest\b)")
 NET_WEAK = re.compile(r"\bcurl\b|\burllib\b")
 LOOPBACK = re.compile(r"\blocalhost\b|127\.0\.0\.1")
 # A segment may open with a keyword, a group or a substitution, then wrappers: `env` (options, NAME=value),
@@ -76,7 +77,7 @@ SHELL_SCRIPT = re.compile(COMMAND_PREFIX + r"(?:\S*/)?(?:ba)?sh\s+(?:-[a-z]+\s+)
                           r"(?:'([^']*)'|\"((?:[^\"\\]|\\.)*)\")")
 GO_COMMAND = re.compile(COMMAND_PREFIX + GO + r"(?:vet|build|run|test)\b")
 # `go vet` puts "vet: " before the first type error of a file it cannot load.
-GO_ERROR = re.compile(r"^\s*(?:vet: )?\S+\.go:\d+(?::\d+)?: |^panic: |^\s*--- FAIL", re.MULTILINE)
+GO_ERROR = re.compile(r"^\s*(?:vet: )?\S+\.go:\d+(?::\d+)?: |^panic: |^fatal error: |^\s*--- FAIL", re.MULTILINE)
 # The common shell forms that write the solution: a redirection (a `cat` heredoc too), `tee`, `sed -i`, `cp` or `mv`
 # onto it, and `open('solution.py', 'w')` in a `python -c`. Other forms (a script, `dd`, `install`) are not seen.
 SOLUTION = r"['\"]?(?:\S*/)?solution\.(?:agc|py|go)(?![\w.])"
@@ -157,8 +158,12 @@ def git(*command: str, cwd: Path) -> str:
 def fetch_sources(commit: str) -> Path:
     """A sparse, shallow checkout of the Agentica commit under .cache; git checks the commit hash."""
     target = CACHE / f"agentica-{commit[:12]}"
-    if (target / ".git").is_dir() and git("rev-parse", "HEAD", cwd=target) == commit:
-        return target
+    try:
+        if (target / ".git").is_dir() and git("rev-parse", "HEAD", cwd=target) == commit:
+            return target
+    except subprocess.CalledProcessError:
+        pass  # a fetch that failed leaves a repository with no commit: clone again
+
     shutil.rmtree(target, ignore_errors=True)
     target.mkdir(parents=True)
     git("init", "-q", cwd=target)
@@ -181,15 +186,18 @@ def release_binary() -> Path:
     archive = CACHE / AGENTICA_ARCHIVE
     if not archive.is_file() or sha256_of(archive) != AGENTICA_ARCHIVE_SHA256:
         CACHE.mkdir(parents=True, exist_ok=True)
-        partial = archive.with_suffix(".part")
         url = f"{AGENTICA_REPO}/releases/download/{AGENTICA_VERSION}/{AGENTICA_ARCHIVE}"
-        with urllib.request.urlopen(url, timeout=120) as response, partial.open("wb") as handle:
-            shutil.copyfileobj(response, handle)
-        if sha256_of(partial) != AGENTICA_ARCHIVE_SHA256:
-            partial.unlink()
-            raise SystemExit(f"{url} does not match its pinned SHA-256")
-        partial.replace(archive)
-    binary = CACHE / f"agentica-{AGENTICA_VERSION}" / "agentica"
+        with tempfile.NamedTemporaryFile(dir=CACHE, prefix=f".{AGENTICA_ARCHIVE}.", delete=False) as handle:
+            partial = Path(handle.name)
+        try:
+            with urllib.request.urlopen(url, timeout=120) as response, partial.open("wb") as out:
+                shutil.copyfileobj(response, out)
+            if sha256_of(partial) != AGENTICA_ARCHIVE_SHA256:
+                raise SystemExit(f"{url} does not match its pinned SHA-256")
+            partial.replace(archive)
+        finally:
+            partial.unlink(missing_ok=True)
+    binary = CACHE / f"agentica-{AGENTICA_VERSION}-{AGENTICA_ARCHIVE_SHA256[:12]}" / "agentica"
     if not binary.is_file():
         member = f"agentica-{AGENTICA_VERSION}-linux-x86_64/bin/agentica"
         with tarfile.open(archive) as bundle:
@@ -375,7 +383,8 @@ def prompt(work: Path, arm: str) -> str:
                      "go.mod is ready. Run programs with `go run solution.go`. The checkers are "
                      "`go vet solution.go` and `go build solution.go`, on your PATH: the solution must pass both, "
                      "so do not silence them. Where the task names `sys.argv` or Python's HTTP modules, use "
-                     "`os.Args` and `net/http`.")
+                     "`os.Args` and `net/http`. Keep the whole program in solution.go; start.go, if there is one, "
+                     "has `//go:build ignore`, which does not matter for your file.")
     else:
         lines.append("Write a complete Python 3 program to solution.py. Run programs with `python3`.")
     lines.append("Work only inside the current directory. Test your program before you finish, then reply with one sentence.")
@@ -899,13 +908,13 @@ def call_metrics(calls: list[Call]) -> dict[str, int]:
     solution) before the next check or run call. Failures that are never edited, or that another check follows
     first, are not rounds.
 
-    A `go build` right after a `go vet` call (no edit or other run between) finishes that check: it is one check
-    run, and one failure at most."""
+    A `go vet` and a `go build` in calls next to each other, in either order (no edit or other run between), are
+    one check: one interpreter run, one check run, and one failure at most."""
     m = {"interpreter_runs": 0, "failing_runs": 0, "check_runs": 0, "check_failures": 0, "fix_rounds": 0,
          "outside_reads": 0, "net_commands": 0, "query_runs": 0, "read_runs": 0}
     awaiting_fix = False
     binaries: set[str] = set()
-    vet_open: bool | None = None  # None, or whether the open `go vet` call failed
+    open_half: tuple[str, bool] | None = None  # the `vet` or `build` call waiting for its other half, and its result
     for call in calls:
         if str(EVAL) in json.dumps(call.args):
             m["outside_reads"] += 1
@@ -916,7 +925,7 @@ def call_metrics(calls: list[Call]) -> dict[str, int]:
         elif edits_solution(call) or writes_solution(command):
             m["fix_rounds"] += awaiting_fix
             awaiting_fix = False
-            vet_open = None
+            open_half = None
         if not command:
             continue
         m["query_runs"] += is_query_command(command)
@@ -927,17 +936,20 @@ def call_metrics(calls: list[Call]) -> dict[str, int]:
             failed = command_failed(command, call.output, binary)
             vetted = any(VET_COMMAND.match(part) for part in command_parts(command))
             built = any(BUILD_COMMAND.match(part) for part in command_parts(command))
-            merged = built and not vetted and vet_open is not None
+            half = "vet" if vetted and not built else "build" if built and not vetted else None
+            first_failed = open_half is not None and open_half[1]
+            merged = half is not None and open_half is not None and open_half[0] != half
+            ran_failed = failed
             if merged:
                 check = False
-                m["check_failures"] += failed and not vet_open
-                failed = failed and not vet_open
-            m["interpreter_runs"] += 1
+                m["check_failures"] += failed and not first_failed
+                failed = failed and not first_failed
+            m["interpreter_runs"] += not merged
             m["check_runs"] += check
             m["failing_runs"] += failed
             m["check_failures"] += failed and check
-            awaiting_fix = failed or (merged and bool(vet_open) and awaiting_fix)
-            vet_open = failed if vetted and not built else None
+            awaiting_fix = failed or (merged and first_failed and awaiting_fix)
+            open_half = (half, ran_failed) if half is not None and not merged else None
             binaries |= built_binaries(command)
     return m
 
@@ -1090,26 +1102,31 @@ def type_check(contained: Contained, total: int) -> dict | None:
             "check_errors": len(re.findall(r": error: ", out))}
 
 
+def go_failure(step: str, text: str, total: int) -> dict:
+    kind, code = ("syntax", "syntax") if "syntax error" in text else ("check", step)
+    return {"status": "fail", "passed": 0, "total": total, "failure": kind, "code": code,
+            "check_errors": len(GO_FILE_ERROR.findall(text))}
+
+
 def go_check(contained: Contained, built: Contained, total: int) -> dict | None:
-    """`go vet`, then `go build` into the workspace; None when both pass, else the failing row. `go vet` stops at
-    the first type error (its `vet: ` line), so then the build runs too and its errors are the count."""
-    for step, command, run_step in (("vet", GO_VET, contained), ("build", GO_BUILD, built)):
-        out, err, returncode = run_step(command, "", CHECK_TIMEOUT)
-        if returncode == 0:
-            continue
-        if out is None:
-            return {"status": "fail", "passed": 0, "total": total, "failure": "check-timeout", "code": step,
-                    "check_errors": 0}
-        text = out + err
-        kind, code = ("syntax", "syntax") if "syntax error" in text else ("check", step)
-        errors = len(GO_FILE_ERROR.findall(text))
-        if step == "vet" and re.search(r"^vet: ", text, re.MULTILINE):
-            build_out, build_err, build_code = built(GO_BUILD, "", CHECK_TIMEOUT)
-            if build_out is not None and build_code != 0:
-                errors = max(errors, len(GO_FILE_ERROR.findall(build_out + build_err)))
-        return {"status": "fail", "passed": 0, "total": total, "failure": kind, "code": code,
-                "check_errors": errors}
-    return None
+    """`go vet`, then `go build` into the workspace; None when both pass, else the failing row.
+
+    `go vet` type-checks first and stops at the first type or syntax error (its `vet: ` line); then the class and
+    the count come from `go build -gcflags=-e`, which lists them all. A vet failure records `build_ok`, so a
+    failure of vet's other analyses alone (the build passes) shows."""
+    out, err, returncode = contained(GO_VET, "", CHECK_TIMEOUT)
+    if out is None:
+        return {"status": "fail", "passed": 0, "total": total, "failure": "check-timeout", "code": "vet",
+                "check_errors": 0}
+    vet_text = out + err if returncode != 0 else ""
+    build_out, build_err, build_code = built(GO_BUILD, "", CHECK_TIMEOUT)
+    if build_out is None:
+        return {"status": "fail", "passed": 0, "total": total, "failure": "check-timeout", "code": "build",
+                "check_errors": 0}
+    if returncode == 0:
+        return None if build_code == 0 else go_failure("build", build_out + build_err, total)
+    typed = re.search(r"^vet: ", vet_text, re.MULTILINE) and build_code != 0
+    return {**go_failure("vet", build_out + build_err if typed else vet_text, total), "build_ok": build_code == 0}
 
 
 def grade(solution: Path, task: str, arm: str, args: argparse.Namespace, scratch: Path, name: str) -> dict:
@@ -1175,7 +1192,9 @@ def classify(err: str, ext: str) -> tuple[str, str | None]:
                 return kind, err[start:err.index("]", start)]
         return "logic", None
     if ext == "go":
-        return ("runtime", "panic") if "panic:" in err else ("logic", None)
+        if "panic:" in err:
+            return "runtime", "panic"
+        return ("runtime", "fatal") if re.search(r"^fatal error: ", err, re.MULTILINE) else ("logic", None)
     if "SyntaxError" in err:
         return "syntax", "SyntaxError"
     if "Traceback" in err:
@@ -1351,9 +1370,18 @@ def agentica_version() -> str:
     return done.stdout.strip() if done.returncode == 0 else ""
 
 
-def run_info(args: argparse.Namespace, image_info: dict[str, str | None]) -> dict:
+def agentica_info(args: argparse.Namespace, used: bool) -> dict:
+    """What run.json records of the Agentica under test; nothing when no arm runs Agentica."""
+    binary = RUNTIME / "bin" / "agentica"
+    return {"agentica_version": agentica_version() if used else None,
+            "agentica_commit": git_output("rev-parse", "HEAD", cwd=ROOT) if used else None,
+            "agentica_binary_sha256": sha256_of(binary) if used and binary.is_file() else None,
+            "agentica_override": args.agentica is not None, "agentica_src_override": args.agentica_src is not None}
+
+
+def run_info(args: argparse.Namespace, image_info: dict[str, str | None], agentica: dict | None = None) -> dict:
     return {"commit": git_output("rev-parse", "HEAD"), "dirty": bool(git_output("status", "--porcelain")),
-            "agentica_version": agentica_version(), "agentica_commit": git_output("rev-parse", "HEAD", cwd=ROOT),
+            **(agentica or {}),
             "agent": args.agent, "model": args.model or "default", "arms": args.arms, "tasks": args.tasks,
             "reps": args.reps, "timeout": args.timeout, "sandbox": args.sandbox, "image": args.image,
             "image_id": image_info["image_id"], "checker": image_info["checker"], "go": image_info.get("go"),
@@ -1432,7 +1460,7 @@ def summarize(results: Path) -> None:
         passes = sum(r["status"] == "pass" for r in rs)
         cases = round(sum(r["passed"] / r["total"] for r in rs) / n * 100)
         kinds = ", ".join(sorted({f"{r['failure']}:{r['code']}" if r["code"] else str(r["failure"]) for r in rs if r["failure"]})) or "-"
-        out.append(f"| {task} | {arm} | {n} | {passes}/{n} | {cases}% | {tokens} | {context} | {mean_known(rs, ('cost',), 4)} | {mean_known(rs, ('cost_input',), 4)} | {mean_known(rs, ('cost_cache',), 4)} | {mean_known(rs, ('cost_output',), 4)} | {mean('seconds')} | {mean('failing_runs')} | {mean_known(rs, ('fix_rounds',), 1)} | {mean('check_runs')} | {mean('query_runs')} | {mean('refused_queries')} | {mean('read_runs')} | {mean('type_escapes')} | {kinds} |")
+        out.append(f"| {task} | {arm} | {n} | {passes}/{n} | {cases}% | {tokens} | {context} | {mean_known(rs, ('cost',), 4)} | {mean_known(rs, ('cost_input',), 4)} | {mean_known(rs, ('cost_cache',), 4)} | {mean_known(rs, ('cost_output',), 4)} | {mean('seconds')} | {mean('failing_runs')} | {mean_known(rs, ('fix_rounds',), 1)} | {mean('check_runs')} | {mean('query_runs')} | {mean('refused_queries')} | {mean('read_runs')} | {mean_known(rs, ('type_escapes',), 1)} | {kinds} |")
     out += ["", *arm_totals(rows)]
     if info.get("cost") is not None:
         out += ["", f"cost: ${info['cost']:.4f}" + (f" (cap ${info['max_cost']:.2f})" if info.get("max_cost") is not None else "")]
@@ -1446,12 +1474,17 @@ def summarize(results: Path) -> None:
 
 
 def arm_totals(rows: list[dict]) -> list[str]:
-    """One line per arm over all its tasks: the spend in total and per run, and the fix rounds per run. A row
-    without the field (an older results file) makes that figure unknown (`-`)."""
-    arms: dict[str, list[dict]] = {}
+    """One line per arm over the tasks every arm ran, so arms with different task sets (the go arm skips a task
+    without Go files) compare on the same tasks: the spend in total and per run, and the fix rounds per run. A row
+    without the field (an older results file) makes that figure unknown (`-`). Each arm's tasks follow the table,
+    and the go arm's runs that failed `go vet` alone (the build passed)."""
+    by_arm: dict[str, list[dict]] = {}
     for row in rows:
-        arms.setdefault(row["arm"], []).append(row)
-    out = ["| arm | runs | pass | spend $ | spend $ per run | fix rounds per run | spend from |",
+        by_arm.setdefault(row["arm"], []).append(row)
+    common = set.intersection(*({row["task"] for row in rs} for rs in by_arm.values())) if by_arm else set()
+    arms = {arm: [row for row in rs if row["task"] in common] for arm, rs in by_arm.items()}
+    out = [f"Totals over the {len(common)} tasks every arm ran:", "",
+           "| arm | runs | pass | spend $ | spend $ per run | fix rounds per run | spend from |",
            "|---|---|---|---|---|---|---|"]
     for arm, rs in sorted(arms.items()):
         total = "-" if any("cost" not in r for r in rs) else f"{sum(r['cost'] for r in rs):.4f}"
@@ -1459,6 +1492,13 @@ def arm_totals(rows: list[dict]) -> list[str]:
                             sorted(Counter(r.get("cost_source", "-") for r in rs).items()))
         out.append(f"| {arm} | {len(rs)} | {sum(r['status'] == 'pass' for r in rs)}/{len(rs)} | {total} | "
                    f"{mean_known(rs, ('cost',), 4)} | {mean_known(rs, ('fix_rounds',), 2)} | {sources} |")
+    out.append("")
+    for arm, rs in sorted(by_arm.items()):
+        out.append(f"{arm} tasks: {' '.join(sorted({row['task'] for row in rs}))}")
+    go = by_arm.get("go", [])
+    if go:
+        out.append(f"go runs that failed go vet alone (the build passed): {sum(bool(r.get('build_ok')) for r in go)} "
+                   f"of {len(go)}")
     return out
 
 
@@ -1569,6 +1609,9 @@ def main() -> int:
         args.arms = ["typed-python", "go"]
     args.arms = args.arms or (REFERENCE_ARMS if args.check_references else DEFAULT_ARMS)
     args.arm_tasks = limit_go_tasks(args.arms, args.tasks, parse_arm_tasks(args.arm_tasks, args.arms, args.tasks))
+    if not args.check_starts and not run_order(args.tasks, args.arms, args.arm_tasks, 1):
+        raise SystemExit("nothing to run: every selected task is skipped by every selected arm "
+                         "(the go arm runs only the tasks with a reference.go)")
     if args.max_cost is not None and args.max_cost <= 0:
         raise SystemExit("--max-cost must be more than 0")
     if args.agent == "reference":
@@ -1603,8 +1646,9 @@ def main() -> int:
         validate_docker(args.image, pi=True)
         print(json.dumps(run_preflight(args)))
         return 0
-    use_sources(args.agentica_src)
-    install_runtime(args.agentica)
+    if agentica:
+        use_sources(args.agentica_src)
+        install_runtime(args.agentica)
     image_info: dict[str, str | None] = {"checker": None, "go": None, "image_id": None, "pi": None}
     if args.sandbox == "docker":
         image_info = validate_docker(args.image, typed, agentica, args.agent == "pi", "go" in args.arms)
@@ -1614,7 +1658,7 @@ def main() -> int:
     stamp = time.strftime("%Y%m%d-%H%M%S")
     results = EVAL / "results" / f"{stamp}-{args.agent}"
     results.mkdir(parents=True)
-    (results / "run.json").write_text(json.dumps({**run_info(args, image_info), "preflight": checked}, indent=2) + "\n",
+    (results / "run.json").write_text(json.dumps({**run_info(args, image_info, agentica_info(args, agentica)), "preflight": checked}, indent=2) + "\n",
                                       encoding="utf-8")
     jobs = run_order(args.tasks, args.arms, args.arm_tasks, args.reps)
     budget = Budget(args.max_cost, args.run_cost_estimate)
