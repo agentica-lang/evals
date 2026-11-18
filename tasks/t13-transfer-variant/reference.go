@@ -84,8 +84,9 @@ func describe(txn Txn) string {
 		return fmt.Sprintf("fee %d (%s)", t.Amount, t.Label)
 	case Transfer:
 		return fmt.Sprintf("transfer %d to %s", t.Amount, t.To)
+	default:
+		panic(fmt.Sprintf("unknown transaction %T", txn))
 	}
-	panic(fmt.Sprintf("unknown transaction %T", txn))
 }
 
 func category(txn Txn) string {
@@ -98,8 +99,9 @@ func category(txn Txn) string {
 		return "fee"
 	case Transfer:
 		return "transfer"
+	default:
+		panic(fmt.Sprintf("unknown transaction %T", txn))
 	}
-	panic(fmt.Sprintf("unknown transaction %T", txn))
 }
 
 func applyTxn(balance int, txn Txn) (int, bool) {
@@ -112,8 +114,9 @@ func applyTxn(balance int, txn Txn) (int, bool) {
 		return balance - t.Amount, t.Amount <= balance
 	case Transfer:
 		return balance - t.Amount, t.Amount <= balance
+	default:
+		panic(fmt.Sprintf("unknown transaction %T", txn))
 	}
-	panic(fmt.Sprintf("unknown transaction %T", txn))
 }
 
 func tally(stats Stats, txn Txn) Stats {

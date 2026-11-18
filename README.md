@@ -34,7 +34,8 @@ The first eight tasks are small programs on stdin and stdout.
 The twelve tasks t9 to t20 are the harder kinds of the 6c comparison (Agentica
 against typed Python), for the pilot. The start programs of t9, t10 and t12 are
 170 to 210 lines in both languages (`wc -l` of `start.agc` and `start.py`); the
-others are 28 to 132 lines.
+others are 28 to 132 lines. Their Go starts are 15 to 25% longer (200 to 231
+lines), mostly from explicit error returns.
 
 | Task | Kind | The agent does |
 |---|---|---|
@@ -300,7 +301,9 @@ What is not equal to the other arms:
   `solution.go`. Some tasks ask for an Agentica or Python type: a `Command[T]`
   enum with exhaustive `case` (t8, t13) or a `Result[Int]` / `int | None` (t14).
   Go has no sum types or exhaustive switch, so the reference uses an interface
-  with a type switch and `(int, bool)`, and nothing checks a missing case.
+  with a type switch and `(int, bool)`, and nothing checks a missing case. A
+  task can add a `task.go.md`, which the go arm gets at the end of its
+  `task.md`: t14's says `(int, bool)` is the expected form.
 - t13 asks for a new variant handled everywhere (`assert_never` in Python, an
   exhaustive `case` in Agentica). The Go start uses type switches with a
   `panic` default, so a missing case is a runtime failure, not a check failure.

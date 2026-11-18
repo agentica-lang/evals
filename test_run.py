@@ -354,6 +354,22 @@ class PrepareTests(unittest.TestCase):
                                      "t15-robust-ledger", "t16-robust-csv", "t17-quote-client",
                                      "t18-stats-server", "t19-orders-report", "t20-big-log"])
 
+    def test_a_go_note_is_added_to_the_task_of_the_go_arm_only(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            task = root / "tasks" / "sample"
+            task.mkdir(parents=True)
+            (task / "task.md").write_text("Sample task.\n", encoding="utf-8")
+            (task / "task.go.md").write_text("In Go, return `(int, bool)`.\n", encoding="utf-8")
+            with patch.object(run, "TASKS", root / "tasks"), patch.object(run, "GO_LANGUAGE", "1.27"):
+                run.prepare(root / "work-go", "sample", "go")
+                run.prepare(root / "work-py", "sample", "typed-python")
+            go_task = (root / "work-go" / "task.md").read_text(encoding="utf-8")
+            python_task = (root / "work-py" / "task.md").read_text(encoding="utf-8")
+
+        self.assertEqual(go_task, "Sample task.\n\nIn Go, return `(int, bool)`.\n")
+        self.assertEqual(python_task, "Sample task.\n")
+
     def test_a_task_without_go_files_is_skipped_by_the_go_arm_only(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             tasks = Path(directory)

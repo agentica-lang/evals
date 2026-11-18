@@ -121,13 +121,23 @@ func reportCommand(state *State) {
 	}
 }
 
+func words(line string) []string {
+	var parts []string
+	for _, word := range strings.Split(line, " ") {
+		if word != "" {
+			parts = append(parts, word)
+		}
+	}
+	return parts
+}
+
 func main() {
 	state := &State{Prices: map[string]int{}}
 	reader := bufio.NewReader(os.Stdin)
 	for {
 		raw, err := reader.ReadString('\n')
 		if line := strings.TrimSpace(raw); line != "" {
-			parts := strings.Fields(line)
+			parts := words(line)
 			args := parts[1:]
 			switch parts[0] {
 			case "price":
