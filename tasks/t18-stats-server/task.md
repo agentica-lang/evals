@@ -26,8 +26,9 @@ as its body.
   missing, not an array, empty, or holds anything but integers, the answer is
   `400` with `{"error":"values must be a non-empty array of integers"}`.
 - `GET /double/N`: when `N` is an integer (digits, with an optional leading
-  `-`), `200` with `{"n":N,"double":2N}`. Otherwise (also an empty `N`) `400`
-  with `{"error":"not an integer"}`.
+  `-`), `200` with `{"n":N,"double":2N}`. Otherwise `400` with
+  `{"error":"not an integer"}`: `N` is everything after `/double/`, so an
+  empty `N` and `/double/1/2` are not integers either.
 - `GET /hello`: `200` with `{"greeting":"hello, NAME"}`. `NAME` is the value of
   the first `name` parameter of the query string (`/hello?name=Ana`), which
   holds only letters and digits. Without a `name` parameter, or with an empty

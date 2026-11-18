@@ -7,7 +7,8 @@ ignored. Integers must fit signed 64-bit; booleans and decimal numbers such as
 `3.0` are not integers.
 
 For each product with `stock >= minimum`, print one compact JSON object on its
-own line, with `name` first and `stock` second. Preserve array order, including
+own line, with `name` first and `stock` second. Non-ASCII text in a name is
+printed as it is (UTF-8), not as `\u` escapes. Preserve array order, including
 repeated names. A valid empty catalog or one without qualifying products prints
 nothing.
 
