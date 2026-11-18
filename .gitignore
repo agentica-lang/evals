@@ -1,0 +1,4 @@
+.secrets/
+results/
+.cache/
+__pycache__/

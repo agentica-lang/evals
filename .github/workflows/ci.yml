@@ -1,0 +1,25 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Build the evaluation image
+        run: docker build --tag agentica-eval:local .
+      - name: Unit tests
+        run: python3 -m unittest discover -p 'test_*.py'
+      - name: Reference solutions (no model calls)
+        run: python3 run.py --check-references --jobs 4
