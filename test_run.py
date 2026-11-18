@@ -907,6 +907,32 @@ class MetricsTests(unittest.TestCase):
         self.assertEqual(run.spend({"model": model, "cost": 0.0})["cost_source"], "none")
 
 
+class AgentTimeoutTests(unittest.TestCase):
+    def test_a_timed_out_agent_keeps_its_transcript_and_the_spend_of_its_finished_turns(self) -> None:
+        turn = json.dumps({"type": "message_end", "message": {"role": "assistant", "usage": {
+            "input": 1000, "output": 200, "cost": {"total": 0.01, "input": 0.004, "output": 0.006}}}})
+        agent = ["sh", "-c", f"printf '%s\\n' '{turn}'; exec sleep 30"]
+        args = Namespace(agent="pi", model="opencode-go/deepseek-v4.1-flash", timeout=2, sandbox="docker",
+                         pass_env=[], image="unused", pi_auth=None, chroot_root=None)
+        passing = {"status": "pass", "passed": 6, "total": 6, "failure": None, "code": None}
+        with (tempfile.TemporaryDirectory() as tmp,
+              patch.object(run, "agent_command", return_value=agent),
+              patch.object(run, "docker_prefix", return_value=[]),
+              patch.object(run, "remove_container"),
+              patch.object(run, "grade", return_value=passing)):
+            results, scratch = Path(tmp) / "results", Path(tmp) / "scratch"
+            results.mkdir()
+            scratch.mkdir()
+            row = run.one_run(args, results, scratch, "t1-stats", "typed-python", 1)
+            transcript = (results / "t1-stats-typed-python-1" / "agent.jsonl").read_text(encoding="utf-8")
+            saved = json.loads((results / "results.jsonl").read_text(encoding="utf-8"))
+        self.assertTrue(row["agent_timeout"])
+        self.assertEqual((row["status"], row["failure"], row["passed"]), ("timeout", "agent-timeout", 6))
+        self.assertEqual((row["cost"], row["cost_source"], row["turns"]), (0.01, "agent-partial", 1))
+        self.assertIn('"message_end"', transcript)
+        self.assertEqual(saved, row)
+
+
 class StartParityTests(unittest.TestCase):
     def test_a_go_start_that_grades_unlike_the_python_start_fails_the_check(self) -> None:
         outcomes = {("t2", "typed-python"): ("fail", 0, "check"), ("t2", "go"): ("fail", 0, "check"),

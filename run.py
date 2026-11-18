@@ -1297,6 +1297,9 @@ def one_run(args: argparse.Namespace, results: Path, scratch: Path, task: str, a
     row["refused_queries"] = refused_queries(work)
     solution = work / f"solution.{ARMS[arm]}"
     row.update(grade(solution, task, arm, args, scratch, name))
+    if timed_out:
+        # The cost counts the turns Pi finished; a request still open when it was killed never reports one.
+        row.update(status="timeout", failure="agent-timeout", code=None, cost_source=f"{row['cost_source']}-partial")
     run_dir = results / name
     run_dir.mkdir(parents=True)
     (run_dir / "agent.jsonl").write_text(out, encoding="utf-8")
