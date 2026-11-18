@@ -12,6 +12,7 @@ def main():
         done = subprocess.run(sys.argv[2:] + ["orders.csv", "report.json"], cwd=directory,
                               capture_output=True, text=True, timeout=30)
         sys.stderr.write(done.stderr)
+        sys.stderr.write(f"PROGRAM-EXIT {done.returncode}\n")
         sys.stdout.write(done.stdout)
         print("--- files")
         for name in sorted(os.listdir(directory)):

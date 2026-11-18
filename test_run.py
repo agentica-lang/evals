@@ -4,6 +4,7 @@ import hashlib
 import io
 import json
 import os
+import time
 import random
 import shutil
 import subprocess
@@ -933,6 +934,145 @@ class AgentTimeoutTests(unittest.TestCase):
         self.assertEqual(saved, row)
 
 
+class TreeTaskTests(unittest.TestCase):
+    def test_a_tree_solution_is_the_source_files_outside_the_tool_folders_and_links(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            work = Path(directory)
+            for name in ("solution.py", "lib/money.py", "tests/test_money.py", "skills/x/tool.py", "bin/run.py",
+                         "test.py", "lib/conftest.py", "specs/money.py", "test/helpers.py", "lib/latest.py",
+                         "deps/pkg/a.py", ".hidden/b.py", "notes.md", "solution.agc"):
+                (work / name).parent.mkdir(parents=True, exist_ok=True)
+                (work / name).write_text("", encoding="utf-8")
+            (work / "linked.py").symlink_to(work / "solution.py")
+            (work / "linked-dir").symlink_to(work / "lib")
+            self.assertEqual(run.solution_files(work, "py"),
+                             [Path("solution.py"), Path("lib/latest.py"), Path("lib/money.py")])
+
+    def test_a_tree_too_big_or_unreadable_fails_before_any_case_runs(self) -> None:
+        args = Namespace(sandbox="docker", image=run.DEFAULT_IMAGE, chroot_root=None)
+        with tempfile.TemporaryDirectory() as directory, patch.object(run, "TASKS", Path(directory) / "tasks"):
+            root = Path(directory)
+            (root / "tasks" / "tree" / "reference").mkdir(parents=True)
+            (root / "tasks" / "tree" / "hidden").mkdir()
+            (root / "tasks" / "tree" / "hidden" / "01.in").write_text("", encoding="utf-8")
+            outcomes = {}
+            for name, files in (("many", {f"lib/m{i:03}.py": "" for i in range(run.TREE_LIMIT)}),
+                                ("large", {"lib/big.py": "#" * (run.TREE_FILE_LIMIT + 1)}),
+                                ("unreadable", {"lib/secret.py": ""})):
+                work = root / name
+                for relative, text in {"solution.py": "", **files}.items():
+                    (work / relative).parent.mkdir(parents=True, exist_ok=True)
+                    (work / relative).write_text(text, encoding="utf-8")
+                scratch = root / f"{name}-scratch"
+                scratch.mkdir()
+                copy = shutil.copyfile
+
+                def unreadable(source: Path, target: Path) -> object:
+                    if Path(source).name == "secret.py":
+                        raise PermissionError(13, "Permission denied", str(source))
+                    return copy(source, target)
+
+                with (patch.object(run, "contained_run", side_effect=AssertionError("no case may run")),
+                      patch.object(run.shutil, "copyfile", unreadable)):
+                    row = run.grade(work / "solution.py", "tree", "python", args, scratch, name)
+                outcomes[name] = (row["status"], row["failure"], row["code"], row["total"])
+        self.assertEqual(outcomes, {"many": ("fail", "size", "too-many-files", 1),
+                                    "large": ("fail", "size", "too-large", 1),
+                                    "unreadable": ("fail", "copy", None, 1)})
+
+    def test_a_tree_runs_python_with_its_folder_on_the_path_and_go_from_a_hidden_binary(self) -> None:
+        self.assertEqual(run.case_invocation("py", None, "x", tree=True), (["python3", "-s", "-E", "solution.py"], "x"))
+        self.assertEqual(run.case_invocation("py", "d", "x", tree=True),
+                         (["python3", "-I", "-", "x", "python3", "-s", "-E", "/workspace/solution.py"], "d"))
+        self.assertEqual(run.case_invocation("go", None, "x", tree=True), (["/workspace/.solution-bin"], "x"))
+
+    def test_a_crash_is_a_crash_marker_and_a_non_zero_exit_or_a_driver(self) -> None:
+        self.assertEqual([run.crashed("runtime", 1, "", False), run.crashed("runtime", 0, "", False),
+                          run.crashed("logic", 1, "", False), run.crashed("runtime", None, "", False)],
+                         [True, False, False, False])
+        # Under a driver, the program's own exit decides: a handled error's traceback with exit 0, or a server the
+        # driver stopped (no PROGRAM-EXIT line), is no crash.
+        self.assertEqual([run.crashed("runtime", 0, "Traceback\nPROGRAM-EXIT 1\n", True),
+                          run.crashed("runtime", 0, "Traceback\nPROGRAM-EXIT 0\n", True),
+                          run.crashed("runtime", 0, "Traceback\n", True)], [True, False, False])
+
+    def test_a_missing_start_tree_stops_with_its_name(self) -> None:
+        with tempfile.TemporaryDirectory() as directory, patch.object(run, "TASKS", Path(directory) / "tasks"):
+            (Path(directory) / "tasks" / "tree" / "reference").mkdir(parents=True)
+            (Path(directory) / "tasks" / "tree" / "start" / "go").mkdir(parents=True)
+            with self.assertRaisesRegex(SystemExit, r"tree: no start tree for typed-python \(start/py/\)"):
+                run.start_outcome(Namespace(), Path(directory), "tree", "typed-python")
+
+    def test_a_task_agent_timeout_only_raises_the_rounds_timeout(self) -> None:
+        with tempfile.TemporaryDirectory() as directory, patch.object(run, "TASKS", Path(directory)):
+            (Path(directory) / "big").mkdir()
+            (Path(directory) / "big" / "agent_timeout").write_text("2400\n", encoding="utf-8")
+            (Path(directory) / "small").mkdir()
+            self.assertEqual((run.agent_timeout("big", 600), run.agent_timeout("big", 3000)), (2400, 3000))
+            self.assertEqual(run.agent_timeout("small", 600), 600)
+
+    def test_spec_runs_and_edits_of_any_source_file_count_in_a_tree_task(self) -> None:
+        calls = [run.Call("bash", {"command": "cd /workspace && agentica test tests/"}, "error[CHECK-TYPE-MISMATCH]"),
+                 run.Call("edit", {"path": "tests/money_test.agc"}),
+                 run.Call("edit", {"path": "lib/money.agc"}),
+                 run.Call("bash", {"command": "python3 -m unittest discover"}, "OK"),
+                 run.Call("bash", {"command": "go test ./..."}, "ok"),
+                 run.Call("bash", {"command": "agentica solution.agc"}, "ok")]
+        more = [run.Call("bash", {"command": "pytest -q"}), run.Call("bash", {"command": "python3 tests/test_money.py"}),
+                run.Call("bash", {"command": "agentica tests/money_test.agc"})]
+        self.assertEqual(run.call_metrics(calls + more, tree=True)["spec_runs"], 6)
+        # An edit of a test file is no fix; a shell write of a source file is, in a tree task only.
+        self.assertEqual(run.call_metrics(calls[:2], tree=True)["fix_rounds"], 0)
+        shell = [calls[0], run.Call("bash", {"command": "cat > lib/money.agc <<'EOF'\nx\nEOF"})]
+        self.assertEqual((run.call_metrics(shell, tree=True)["fix_rounds"], run.call_metrics(shell)["fix_rounds"]), (1, 0))
+        self.assertEqual(run.call_metrics(calls, tree=True)["fix_rounds"], 1)  # lib/money.agc
+        self.assertEqual(run.call_metrics(calls)["fix_rounds"], 0)
+
+    def test_the_quality_table_sums_the_new_fields_and_shows_old_rows_as_unknown(self) -> None:
+        new = {"status": "pass", "passed": 3, "total": 3, "cost": 0.02, "adversarial_passed": 1,
+               "adversarial_total": 2, "crash_cases": 1, "regressions": 0, "hygiene_failed": 0, "spec_runs": 2}
+        failed = {**new, "status": "fail", "passed": 1, "crash_cases": 2, "regressions": 1}
+        old = {"status": "pass", "passed": 1, "total": 1, "cost": 0.01}
+        lines = run.quality_totals({"skill": [new, failed], "python": [new, old]})
+        self.assertEqual(lines[2], "| python | 4/4 | - | - | - | - | - | 0.0150 |")
+        self.assertEqual(lines[3], "| skill | 4/6 | 2/4 | 3 | 1 | 0 | 4 | 0.0400 |")
+
+
+class TreeRunTests(unittest.TestCase):
+    def test_a_tree_run_starts_from_the_start_tree_and_keeps_every_source_file(self) -> None:
+        agent = ["sh", "-c", "mkdir -p lib && echo 'x = 1' > lib/extra.py && cat lib/money.py > solution.py"]
+        args = Namespace(agent="pi", model="opencode-go/deepseek-v4.1-flash", timeout=30, sandbox="docker",
+                         pass_env=[], image="unused", pi_auth=None, chroot_root=None)
+        graded: list[list[Path]] = []
+
+        def fake_grade(solution: Path, task: str, arm: str, *rest: object) -> dict:
+            graded.append(run.solution_files(solution.parent, "py"))
+            return {"status": "pass", "passed": 1, "total": 1, "failure": None, "code": None}
+
+        with (tempfile.TemporaryDirectory() as tmp,
+              patch.object(run, "TASKS", Path(tmp) / "tasks"),
+              patch.object(run, "agent_command", return_value=agent),
+              patch.object(run, "docker_prefix", return_value=[]),
+              patch.object(run, "remove_container"),
+              patch.object(run, "grade", fake_grade)):
+            task = Path(tmp) / "tasks" / "tree"
+            (task / "start" / "py" / "lib").mkdir(parents=True)
+            (task / "start" / "py" / "lib" / "money.py").write_text("print(1)\n", encoding="utf-8")
+            (task / "reference" / "py").mkdir(parents=True)
+            (task / "hidden").mkdir()
+            (task / "task.md").write_text("task\n", encoding="utf-8")
+            results, scratch = Path(tmp) / "results", Path(tmp) / "scratch"
+            results.mkdir()
+            scratch.mkdir()
+            row = run.one_run(args, results, scratch, "tree", "python", 1)
+            kept = sorted(str(path.relative_to(results / "tree-python-1")) for path in
+                          (results / "tree-python-1" / "solution").rglob("*.py"))
+
+        self.assertEqual(graded, [[Path("solution.py"), Path("lib/extra.py"), Path("lib/money.py")]])
+        self.assertEqual(kept, ["solution/lib/extra.py", "solution/lib/money.py", "solution/solution.py"])
+        self.assertEqual((row["status"], row["regressions"], row["crash_cases"]), ("pass", 0, 0))
+
+
 class StartParityTests(unittest.TestCase):
     def test_a_go_start_that_grades_unlike_the_python_start_fails_the_check(self) -> None:
         outcomes = {("t2", "typed-python"): ("fail", 0, "check"), ("t2", "go"): ("fail", 0, "check"),
@@ -1066,10 +1206,13 @@ class CaseCommandTests(unittest.TestCase):
     def test_every_task_has_a_reference_per_language_and_cases(self) -> None:
         for task in sorted(path for path in run.TASKS.iterdir() if path.is_dir()):
             with self.subTest(task=task.name):
-                for name in ("task.md", "reference.agc", "reference.py"):
-                    self.assertTrue((task / name).is_file(), name)
+                self.assertTrue((task / "task.md").is_file())
+                for ext in ("agc", "py"):
+                    reference = (task / "reference" / ext / f"solution.{ext}" if run.tree_task(task.name)
+                                 else task / f"reference.{ext}")
+                    self.assertTrue(reference.is_file(), reference)
                 cases = sorted((task / "hidden").glob("*.in"))
-                self.assertTrue(cases)
+                self.assertTrue([case for case in cases if run.case_tier(case) != run.ADVERSARIAL])
                 for case in cases:
                     self.assertTrue(case.with_suffix(".out").is_file(), case.name)
 
@@ -1501,6 +1644,17 @@ class SummaryTests(unittest.TestCase):
                       summary)
         self.assertIn("stopped_for_budget: false", summary)
 
+    def test_a_task_with_no_main_cases_counts_its_runs_as_whole(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            results = Path(directory)
+            row = {"task": "t", "arm": "python", "status": "pass", "passed": 0, "total": 0, "seconds": 1.0,
+                   "failing_runs": 0, "check_runs": 0, "query_runs": 0, "refused_queries": 0, "read_runs": 0,
+                   "failure": None, "code": None}
+            (results / "results.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
+            with contextlib.redirect_stdout(io.StringIO()):
+                run.summarize(results)
+            self.assertIn("| t | python | 1 | 1/1 | 100% |", (results / "summary.md").read_text(encoding="utf-8"))
+
     def test_summary_shows_the_context_and_the_cost_split(self) -> None:
         row = {"task": "t1", "arm": "skill", "status": "pass", "passed": 1, "total": 1, "seconds": 1.0,
                "failure": None, "code": None}
@@ -1705,6 +1859,67 @@ class DockerGradingTests(unittest.TestCase):
                           ("pass", 1, None, None), ("fail", 0, "check", "vet")])
         # go vet stops at the first type error of the t2 start; the build lists all six.
         self.assertEqual(results[-1]["check_errors"], 6)
+
+    def test_a_tree_solution_grades_with_its_modules_and_counts_case_tiers(self) -> None:
+        if run.go_probe(run.DEFAULT_IMAGE)[0] != 0:
+            self.skipTest("evaluation image has no Go")
+        run.ensure_go(run.DEFAULT_IMAGE)
+        python = {"solution.py": "import sys\n\nfrom calc.double import double\n\nprint(double(int(sys.stdin.read())))\n",
+                  "calc/__init__.py": "",
+                  "calc/double.py": "def double(n: int) -> int:\n    return n * 2\n",
+                  "skills/ignored.py": "this is not python\n",
+                  "tests/test_calc.py": "def check(n):\n    return n\n",
+                  "calc/double_test.py": "def check(n):\n    return n  # type: ignore\n"}
+        go = {"solution.go": 'package main\n\nimport (\n\t"fmt"\n\t"io"\n\t"os"\n\t"strconv"\n\t"strings"\n\n'
+                             '\t"solution/calc"\n)\n\nfunc main() {\n\tdata, _ := io.ReadAll(os.Stdin)\n'
+                             '\tn, err := strconv.Atoi(strings.TrimSpace(string(data)))\n\tif err != nil {\n'
+                             '\t\tpanic(err)\n\t}\n\tfmt.Println(calc.Double(n))\n}\n',
+              "calc/calc.go": "package calc\n\nfunc Double(n int) int { return n * 2 }\n",
+              "calc/calc_test.go": 'package calc\n\nimport "fmt"\n\nfunc helper() { fmt.Printf("%d", "x") }\n'}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            task = root / "tasks" / "tree"
+            hidden = task / "hidden"
+            hidden.mkdir(parents=True)
+            (task / "reference").mkdir()
+            for name, case, expected in (("01", "3", "6"), ("reg-01", "4", "8"), ("hyg-01", "5", "10"),
+                                         ("adv-01", "boom", "error"), ("adv-02", "7", "14")):
+                (hidden / f"{name}.in").write_text(case + "\n", encoding="utf-8")
+                (hidden / f"{name}.out").write_text(expected + "\n", encoding="utf-8")
+            args = Namespace(sandbox="docker", image=run.DEFAULT_IMAGE, chroot_root=None)
+            results = {}
+            copy = shutil.copyfile
+
+            def keep_time(source: Path, target: Path) -> object:
+                copied = copy(source, target)
+                shutil.copystat(source, target)
+                return copied
+
+            for arm, files in (("typed-python", python), ("python", python), ("go", go),
+                               ("typed-python-bad", {**python, "calc/double.py": "def double(n: int) -> str:\n    return n\n"})):
+                work = root / arm
+                for name, text in files.items():
+                    (work / name).parent.mkdir(parents=True, exist_ok=True)
+                    (work / name).write_text(text, encoding="utf-8")
+                    # Old files, kept old in the copy: Go indexes a folder whose files are older than two seconds.
+                    os.utime(work / name, (time.time() - 3600, time.time() - 3600))
+                scratch = root / f"{arm}-scratch"
+                scratch.mkdir()
+                with patch.object(run, "TASKS", root / "tasks"), patch.object(run.shutil, "copyfile", keep_time):
+                    solution = work / f"solution.{run.ARMS[arm.removesuffix('-bad')]}"
+                    results[arm] = run.grade(solution, "tree", arm.removesuffix("-bad"), args, scratch, arm)
+
+        for arm in ("typed-python", "python", "go"):
+            with self.subTest(arm=arm):
+                row = results[arm]
+                self.assertEqual((row["status"], row["passed"], row["total"]), ("pass", 3, 3))
+                self.assertEqual((row["adversarial_passed"], row["adversarial_total"], row["crash_cases"]), (1, 2, 1))
+                self.assertEqual((row["regressions"], row["hygiene_failed"]), (0, 0))
+                self.assertEqual(row["failed_cases"], ["adv-01"])
+        # The agent's own tests are not graded (an unannotated test, a vet error in a _test.go file); mypy checks the
+        # module that solution.py imports, not only solution.py.
+        self.assertEqual((results["typed-python-bad"]["status"], results["typed-python-bad"]["failure"]),
+                         ("fail", "check"))
 
     def test_an_ecosystem_task_builds_with_the_baked_sqlite_module_offline_and_nothing_else(self) -> None:
         if run.go_probe(run.DEFAULT_IMAGE)[0] != 0:

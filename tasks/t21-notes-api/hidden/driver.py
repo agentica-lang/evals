@@ -70,7 +70,8 @@ def start(command, database):
 
 
 def stop(proc, errors):
-    if proc.poll() is None:
+    exited = proc.poll() is not None
+    if not exited:
         os.killpg(proc.pid, signal.SIGTERM)
         try:
             proc.wait(timeout=5)
@@ -78,6 +79,8 @@ def stop(proc, errors):
             os.killpg(proc.pid, signal.SIGKILL)
             proc.wait()
     errors.append(proc.stderr.read().decode("utf-8", "replace"))
+    if exited:
+        errors.append(f"PROGRAM-EXIT {proc.returncode}\n")
 
 
 def table(database):
