@@ -1,0 +1,2 @@
+{"control":"x\u0001y","dollar":"cost $5 and $ {who}","escapes":"q\" b\\ n\n t\t d$ world","greeting":"hello world, 42 true!","tabbed":"a\tb","unicode":"naïve ☃"}
+exit 0

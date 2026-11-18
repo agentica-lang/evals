@@ -1,0 +1,2 @@
+{"A":2,"_k":3,"b2":[1,2],"c":3,"copy":{"list":[1,2,3],"nested":{"deep":{"deeper":2}},"value":20},"deep":2,"empty":{},"first":1,"last":3,"none":[],"z":1}
+exit 0

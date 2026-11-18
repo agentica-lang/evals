@@ -1,0 +1,4 @@
+=== main.conf
+import "a.conf" as a
+=== a.conf
+v = "open

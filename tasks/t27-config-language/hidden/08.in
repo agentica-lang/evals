@@ -1,0 +1,7 @@
+=== main.conf
+a = 1  # comment
+
+# only a comment
+
+
+b = "# not a comment"

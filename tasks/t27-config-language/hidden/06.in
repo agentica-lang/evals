@@ -1,0 +1,8 @@
+=== main.conf
+import "sub/x.conf" as x
+value = x.y
+=== sub/x.conf
+import "y/z.conf" as z
+y = z.w + 1
+=== sub/y/z.conf
+w = 41

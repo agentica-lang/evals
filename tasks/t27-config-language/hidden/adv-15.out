@@ -1,0 +1,2 @@
+error E-SYNTAX at main.conf:6:30
+exit 1

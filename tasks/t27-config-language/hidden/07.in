@@ -1,0 +1,12 @@
+=== main.conf
+let x = 1
+r = {
+  let x = 2
+  inner = x
+  s = { let x = 3, v = x }
+}
+outer = x
+short = false && (1 / 0 == 0)
+long = true || [1][5] == 1
+pick = if false then 1 / 0 else 3
+chain = if 1 > 2 then "a" else if 2 > 1 then "b" else "c"

@@ -1,0 +1,8 @@
+=== main.conf
+import "ok.conf" as a
+import "bad.conf" as b
+import "ok.conf" as a
+=== ok.conf
+v = 1
+=== bad.conf
+v = 1 +

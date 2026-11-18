@@ -293,8 +293,48 @@ class TaskFaultTests(unittest.TestCase):
                 self.assertNotEqual(self.failing_cases(reference.replace(right, wrong)), [])
 
 
-class FanoutFaultTests(unittest.TestCase):
-    """Each fault put into the t25 Python reference fails the cases meant to see it, and the reference passes them."""
+class FaultTests(unittest.TestCase):
+    """Each fault put into a task's Python reference fails the cases meant to see it, and the reference passes them.
+    A fault is (module under PACKAGE, the right text, the wrong text, the cases)."""
+
+    TASK, PACKAGE = "", ""
+    FAULTS: dict[str, tuple[str, str, str, list[str]]] = {}
+
+    def failing_cases(self, tree: Path, names: list[str]) -> list[str]:
+        hidden = run.TASKS / self.TASK / "hidden"
+        failing = []
+        for name in names:
+            case = hidden / f"{name}.in"
+            done = subprocess.run([sys.executable, "-I", str(hidden / "driver.py"), case.read_text(encoding="utf-8"),
+                                   sys.executable, "-B", "-s", "-E", str(tree / "solution.py")],
+                                  capture_output=True, text=True, timeout=120)
+            if done.stdout != case.with_suffix(".out").read_text(encoding="utf-8"):
+                failing.append(name)
+        return failing
+
+    def test_every_fault_fails_its_cases(self) -> None:
+        if not self.TASK:
+            self.skipTest("the base of the fault tests")
+        reference = run.TASKS / self.TASK / "reference" / "py"
+        targets = sorted({name for *_, names in self.FAULTS.values() for name in names})
+        with tempfile.TemporaryDirectory() as directory:
+            tree = Path(directory) / "tree"
+            # No bytecode: a fault of the same size written in the same second would reuse a stale .pyc.
+            shutil.copytree(reference, tree, ignore=shutil.ignore_patterns("__pycache__"))
+            self.assertEqual(self.failing_cases(tree, targets), [])
+            for fault, (module, right, wrong, names) in self.FAULTS.items():
+                with self.subTest(fault=fault):
+                    source = (reference / self.PACKAGE / module).read_text(encoding="utf-8")
+                    self.assertEqual(source.count(right), 1)
+                    (tree / self.PACKAGE / module).write_text(source.replace(right, wrong), encoding="utf-8")
+                    self.assertEqual(self.failing_cases(tree, names), names)
+                    (tree / self.PACKAGE / module).write_text(source, encoding="utf-8")
+
+
+class FanoutFaultTests(FaultTests):
+    """t25: faults in the fetcher."""
+
+    TASK, PACKAGE = "t25-fanout-deadlines", "fetcher"
 
     FAULTS = {
         "no hedge": ("fetch.py", "if job.hedge_ms > 0:", "if False:", ["05", "hyg-03"]),
@@ -327,33 +367,26 @@ class FanoutFaultTests(unittest.TestCase):
         "no 64-bit bound": ("fetch.py", "or not -LIMIT <= value < LIMIT", "", ["adv-05"]),
     }
 
-    def failing_cases(self, tree: Path, names: list[str]) -> list[str]:
-        hidden = run.TASKS / "t25-fanout-deadlines" / "hidden"
-        failing = []
-        for name in names:
-            case = hidden / f"{name}.in"
-            done = subprocess.run([sys.executable, "-I", str(hidden / "driver.py"), case.read_text(encoding="utf-8"),
-                                   sys.executable, "-B", "-s", "-E", str(tree / "solution.py")],
-                                  capture_output=True, text=True, timeout=120)
-            if done.stdout != case.with_suffix(".out").read_text(encoding="utf-8"):
-                failing.append(name)
-        return failing
 
-    def test_every_fault_fails_its_cases(self) -> None:
-        reference = run.TASKS / "t25-fanout-deadlines" / "reference" / "py"
-        targets = sorted({name for *_, names in self.FAULTS.values() for name in names})
-        with tempfile.TemporaryDirectory() as directory:
-            tree = Path(directory) / "tree"
-            # No bytecode: a fault of the same size written in the same second would reuse a stale .pyc.
-            shutil.copytree(reference, tree, ignore=shutil.ignore_patterns("__pycache__"))
-            self.assertEqual(self.failing_cases(tree, targets), [])
-            for fault, (module, right, wrong, names) in self.FAULTS.items():
-                with self.subTest(fault=fault):
-                    source = (reference / "fetcher" / module).read_text(encoding="utf-8")
-                    self.assertEqual(source.count(right), 1)
-                    (tree / "fetcher" / module).write_text(source.replace(right, wrong), encoding="utf-8")
-                    self.assertEqual(self.failing_cases(tree, names), names)
-                    (tree / "fetcher" / module).write_text(source, encoding="utf-8")
+class ConfFaultTests(FaultTests):
+    """t27: faults in the stages of the interpreter."""
+
+    TASK, PACKAGE = "t27-config-language", "conf"
+    FAULTS = {
+        "the default recursion limit": ("../solution.py", "    sys.setrecursionlimit(20000)\n", "", ["76", "77", "78"]),
+        "newlines end a line in parentheses": ("parser.py", "            self.spaces.append(True)\n            inner",
+                                               "            self.spaces.append(False)\n            inner", ["04"]),
+        "chained comparisons": ("parser.py", "SINGLE = {2, 3}", "SINGLE: set[int] = set()", ["10", "69"]),
+        "no short circuit": ("evaluator.py", "        if left == (op == \"||\"):\n            return left\n", "",
+                             ["07", "42"]),
+        "no overflow check": ("evaluator.py", "    if not MIN_INT <= value <= MAX_INT:", "    if False:", ["33", "36"]),
+        "no cycle check": ("loader.py", "        if name in stack:", "        if False:", ["52", "54"]),
+        "keys in written order": ("output.py", "sorted(value, key=lambda key: key.encode())", "list(value)", ["01"]),
+        "a name bound before its value": ("checker.py", "        expr(statement.value, scopes)\n        if statement.is_let:\n"
+                                          "            scopes[-1].add(statement.name.text)\n",
+                                          "        if statement.is_let:\n            scopes[-1].add(statement.name.text)\n"
+                                          "        expr(statement.value, scopes)\n", ["81"]),
+    }
 
 
 class PrepareTests(unittest.TestCase):

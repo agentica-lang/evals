@@ -1,0 +1,11 @@
+=== main.conf
+import "lib.conf" as lib
+let n = 3
+name = "s c-${n}"
+items = [1, 2,
+n * 2] + lib.extra
+cfg = { let k = n - 1, port  8000 + k, on = k > 1 && !false }
+pick = if n == 3 then cfg.port else 0
+text = "a\tb ${name}" + "!"
+=== lib.conf
+extra = [7]

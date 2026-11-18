@@ -1,0 +1,3 @@
+=== main.conf
+a = { let v = 1 }
+b = v

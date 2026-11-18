@@ -2,3 +2,4 @@
 *.agcb binary
 *.agc linguist-language=Ruby
 tasks/t19-orders-report/hidden/05.in binary
+tasks/t27-config-language/hidden/63.in binary

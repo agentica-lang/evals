@@ -1,0 +1,3 @@
+=== main.conf
+let r = {a = 1}
+b = r.c

@@ -1,0 +1,2 @@
+error E-OVERFLOW at main.conf:1:5
+exit 1

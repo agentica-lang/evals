@@ -1,0 +1,5 @@
+=== main.conf
+import "a.conf" as a
+x = y
+=== a.conf
+v = 1 / 0

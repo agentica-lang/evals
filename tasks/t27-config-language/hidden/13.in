@@ -1,0 +1,3 @@
+=== main.conf
+a = 1
+import "x.conf" as x
