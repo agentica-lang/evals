@@ -2,7 +2,7 @@
 
 ## Options
 
-`--tasks` picks tasks (the default is all twenty). `--arms` picks arms (the
+`--tasks` picks tasks (the default is all six). `--arms` picks arms (the
 default is every arm but the opt-in `skill-nocli` and `go`). `--arm-tasks
 ARM=TASK,TASK` limits one arm to some of the tasks (full task names, all in
 `--tasks`; repeat the option for another arm). `--max-cost USD` is a soft cap on

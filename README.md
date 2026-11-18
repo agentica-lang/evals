@@ -9,8 +9,8 @@ live in `tests/eval/` of
 [agentica-lang/agentica](https://github.com/agentica-lang/agentica), and its
 history came along.
 
-The suite has eight tasks: four small ones and four larger tree tasks. The task
-list, the hidden cases and the ecosystem tasks are in
+The suite has six tasks: four small ones and two larger tree tasks (t25, t27).
+The task list, the hidden cases and the ecosystem tasks are in
 [docs/tasks.md](docs/tasks.md).
 
 ## The arms
@@ -61,10 +61,11 @@ before a round are in [docs/running.md](docs/running.md).
 
 Easy tasks did not separate the arms in round 1. In the round 10 pilot, Agentica
 cost 1.5 to 3.3 times more per run than typed Python, mostly for reading the
-skill. Round 12 cut the skill from about 5,300 to 1,600 tokens: tokens per run
-fell 14% to 23%, and the pass rates held.
+skill, and gpt-oss passed fewer cases on Agentica (31/60 against 45/60). Round
+12 cut the skill from about 5,300 to 1,600 tokens: tokens per run fell 14% to
+23%, and the pass rates held.
 
-Round 13 was the first full 6c round (2026-10-22). Pass rates were close:
+Round 13 was the first full 6c round (2026-10-22). The data was mixed:
 DeepSeek 38/39 `skill` against 39/39 `typed-python`, and GLM 58/60 against
 53/60. Agentica cost 1.8 times (DeepSeek) and 3.1 times (GLM) as much per run.
 No run called the query commands.

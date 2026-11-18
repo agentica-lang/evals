@@ -8,10 +8,10 @@ can hold an intentional bug: when you edit a task, do not repair it and do not
 change the hidden cases. `run.py` runs the agents. `diagnostics.py` counts the
 diagnostics the agents saw in their logs.
 
-The suite keeps eight tasks (#15): four small ones from the first rounds and
-four larger ones (t24 to t27, coming one by one). The removed tasks (t1–t7,
-t9–t15, t17, t19, t20, t22, t23) are in git history; the ids are kept, so the
-numbers of earlier rounds still name the same tasks.
+The suite keeps six tasks (#15): four small ones from the first rounds and two
+larger tree tasks (t25, t27). The removed tasks (t1–t7, t9–t15, t17, t19, t20,
+t22, t23) are in git history; the ids are kept, so the numbers of earlier rounds
+still name the same tasks.
 
 | Task | Kind | The agent does |
 |---|---|---|
