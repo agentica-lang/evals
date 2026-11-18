@@ -1,10 +1,10 @@
-import HTTP from "std/http"
+import Client from "client"
 import {Job} from "job"
 
 LIMIT = 1024
 
 enum Outcome
-  Response(Int, Bytes)
+  Response(Int, String)
   Failed
 end
 
@@ -59,9 +59,8 @@ def retryable(outcome: Outcome) -> Bool
 end
 
 def send_request(request: Request) -> Void
-  options = HTTP.ClientOptions(timeout_ms: request.timeout_ms, connect_timeout_ms: request.timeout_ms)
-  outcome = case HTTP.get_response(request.url, options)
-    ok(response) -> Outcome.Response(response.status, response.body)
+  outcome = case Client.get(request.url, request.timeout_ms)
+    ok(answer) -> Outcome.Response(answer.status, answer.body)
     error(_) -> Outcome.Failed
   end
   _ = request.inbox.send(outcome, 1000)
@@ -125,9 +124,8 @@ def describe(outcome: Outcome) -> String
   end
 end
 
-def value(body: Bytes) -> Result[Int]
-  text = try HTTP.text(body)
-  json = try JSON.parse(text)
+def value(body: String) -> Result[Int]
+  json = try JSON.parse(body)
   field = try JSON.get(json, "value")
   JSON.int(field)
 end

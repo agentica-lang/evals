@@ -61,6 +61,19 @@ alone (see "The ecosystem tasks").
 | `t22-orders-api` | repair on packages | an orders API with a wrong status, SQL built from text, wrong totals, order and checks |
 | `t23-todo-priority` | schema change on packages | add a `priority` column to a live database made by the old version, and a filter |
 
+The larger tasks from t25 on (#15) are tree tasks (see "Tree tasks and case
+tiers"): solutions of several files, with adversarial and hygiene cases. Each
+targets a strength of Agentica.
+
+| Task | Kind | The agent does |
+|---|---|---|
+| `t25-fanout-deadlines` | concurrency | fetch URLs with a concurrency limit, request timeouts, hedged requests (the loser cancelled), retries with backoff and a deadline for the whole run |
+
+t25's driver is an HTTP backend that follows a script per URL (delays, hangs, a
+body a byte at a time, resets, status sequences). Its hygiene cases check the
+concurrency limit, that the run ends by the deadline, and that a hedge's loser
+is closed before its answer. `agent_timeout` gives it 2400 seconds.
+
 The arms are the context an agent gets:
 
 - `python`: the same task in Python (untyped). The baseline of the first rounds.

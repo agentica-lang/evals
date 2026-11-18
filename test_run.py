@@ -292,6 +292,49 @@ class TaskFaultTests(unittest.TestCase):
                 self.assertNotEqual(self.failing_cases(reference.replace(right, wrong)), [])
 
 
+class FanoutFaultTests(unittest.TestCase):
+    """Each fault put into the t25 Python reference fails the cases meant to see it, and the reference passes them."""
+
+    FAULTS = {
+        "no hedge": ("fetch.py", "if job.hedge_ms > 0:", "if False:", ["05", "hyg-03"]),
+        "the loser not cancelled": ("fetch.py", "        for request in requests:\n            request.cancel()",
+                                    "        pass", ["hyg-03"]),
+        "no deadline": ("fetch.py", "await asyncio.wait(tasks, timeout=max(0.0, ends_at - time.monotonic()))",
+                        "await asyncio.wait(tasks)", ["06", "hyg-02"]),
+        "one at a time": ("fetch.py", "asyncio.Semaphore(job.concurrency)", "asyncio.Semaphore(1)", ["hyg-01"]),
+        "4xx retried": ("fetch.py", "not 500 <= answer[0] <= 599", "answer[0] == 200", ["02"]),
+        "a boolean value": ("fetch.py", "type(value) is not int", "not isinstance(value, int)", ["adv-05"]),
+        "a boolean field": ("job.py", "type(value) is not int", "not isinstance(value, int)", ["adv-03"]),
+    }
+
+    def failing_cases(self, tree: Path, names: list[str]) -> list[str]:
+        hidden = run.TASKS / "t25-fanout-deadlines" / "hidden"
+        failing = []
+        for name in names:
+            case = hidden / f"{name}.in"
+            done = subprocess.run([sys.executable, "-I", str(hidden / "driver.py"), case.read_text(encoding="utf-8"),
+                                   sys.executable, "-s", "-E", str(tree / "solution.py")],
+                                  capture_output=True, text=True, timeout=120)
+            if done.stdout != case.with_suffix(".out").read_text(encoding="utf-8"):
+                failing.append(name)
+        return failing
+
+    def test_every_fault_fails_its_cases(self) -> None:
+        reference = run.TASKS / "t25-fanout-deadlines" / "reference" / "py"
+        targets = sorted({name for *_, names in self.FAULTS.values() for name in names})
+        with tempfile.TemporaryDirectory() as directory:
+            tree = Path(directory) / "tree"
+            shutil.copytree(reference, tree)
+            self.assertEqual(self.failing_cases(tree, targets), [])
+            for fault, (module, right, wrong, names) in self.FAULTS.items():
+                with self.subTest(fault=fault):
+                    source = (reference / "fetcher" / module).read_text(encoding="utf-8")
+                    self.assertEqual(source.count(right), 1)
+                    (tree / "fetcher" / module).write_text(source.replace(right, wrong), encoding="utf-8")
+                    self.assertEqual(self.failing_cases(tree, names), names)
+                    (tree / "fetcher" / module).write_text(source, encoding="utf-8")
+
+
 class PrepareTests(unittest.TestCase):
     def test_grammar_arm_writes_the_whole_specification(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
