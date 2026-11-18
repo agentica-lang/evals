@@ -348,7 +348,7 @@ class PrepareTests(unittest.TestCase):
         available = sorted(task.name for task in run.TASKS.iterdir() if (task / "reference.go").is_file())
         self.assertEqual(available, ["t1-stats", "t2-fix-types", "t3-struct-change", "t4-word-count",
                                      "t5-scope-return", "t6-json-catalog", "t7-json-stream", "t8-enum-ledger",
-                                     "t9-inventory-orders"])
+                                     "t9-inventory-orders", "t10-calc-extend", "t12-member-ids"])
 
     def test_a_task_without_go_files_is_skipped_by_the_go_arm_only(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
