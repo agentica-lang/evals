@@ -58,6 +58,7 @@ alone (see "The ecosystem tasks").
 | Task | Kind | The agent does |
 |---|---|---|
 | `t21-notes-api` | build on packages | a JSON API for notes on SQLite, from a start that answers `/health` only |
+| `t22-orders-api` | repair on packages | an orders API with a wrong status, SQL built from text, wrong totals, order and checks |
 
 The arms are the context an agent gets:
 

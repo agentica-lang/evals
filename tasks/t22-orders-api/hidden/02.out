@@ -1,0 +1,14 @@
+POST /orders -> 400 application/json {"error":"invalid order"}
+POST /orders -> 400 application/json {"error":"invalid order"}
+POST /orders -> 400 application/json {"error":"invalid order"}
+POST /orders -> 400 application/json {"error":"invalid order"}
+POST /orders -> 400 application/json {"error":"invalid order"}
+POST /orders -> 400 application/json {"error":"invalid order"}
+POST /orders -> 400 application/json {"error":"invalid order"}
+POST /orders -> 400 application/json {"error":"invalid order"}
+POST /orders -> 400 application/json {"error":"invalid order"}
+POST /orders -> 400 application/json {"error":"invalid order"}
+POST /orders -> 201 application/json {"cents":0,"customer":"ana","id":1,"item":"free","quantity":4}
+GET /report -> 200 application/json {"customers":[{"customer":"ana","orders":1,"total_cents":0}]}
+customers: [[1,"ana"]]
+orders: [[1,1,"free",4,0]]
