@@ -20,7 +20,6 @@ type answer struct {
 }
 
 var client = &http.Client{
-	Transport:     &http.Transport{DisableKeepAlives: true},
 	CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 }
 

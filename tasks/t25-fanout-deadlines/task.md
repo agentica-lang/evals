@@ -44,7 +44,9 @@ request is still going; when every request of the attempt has failed, the
 attempt got no response.
 
 A request times out when its whole response (head and body) has not arrived
-within `request_timeout_ms` of sending it.
+within `request_timeout_ms` of sending it. A response, here and for hedging,
+is the whole response: a request whose head came but whose body did not has
+no response yet.
 
 An attempt that ends with a status from 500 to 599, or with no response, is
 retried: after `backoff_ms`, then `2 * backoff_ms`, then `4 * backoff_ms` and so
@@ -53,16 +55,17 @@ on, up to `retries` more attempts. Any other status ends the URL.
 The whole run has a deadline: `deadline_ms` after the program starts. When it
 passes, every request still going is cancelled, every URL not done gets the
 result `error deadline` (also one waiting for a retry or not started yet), and
-the program prints its report and exits at once. A run never takes much longer
-than `deadline_ms`.
+the program prints its report and exits at once: the whole run, from the
+program's start to its exit, takes at most `deadline_ms` plus one second.
 
 ## Results and output
 
 The result of a URL is, from its last attempt:
 
 - status 200 and a body that is a JSON object whose `value` is an integer
-  that fits in a signed 64-bit integer (not a boolean or a decimal such as
-  `3.0`): `ok VALUE`;
+  that fits in a signed 64-bit integer: `ok VALUE`. An integer is a JSON
+  number without a fraction or an exponent (`-0` is the integer 0; `3.0` and
+  `1E2` are not integers), and not a boolean;
 - status 200 and any other body: `error body`;
 - another status: `error status CODE`;
 - no response: `error no response`;

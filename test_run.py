@@ -306,6 +306,25 @@ class FanoutFaultTests(unittest.TestCase):
         "4xx retried": ("fetch.py", "not 500 <= answer[0] <= 599", "answer[0] == 200", ["02"]),
         "a boolean value": ("fetch.py", "type(value) is not int", "not isinstance(value, int)", ["adv-05"]),
         "a boolean field": ("job.py", "type(value) is not int", "not isinstance(value, int)", ["adv-03"]),
+        "a constant backoff": ("fetch.py", "backoff *= 2", "backoff *= 1", ["07"]),
+        "an immediate hedge": ("fetch.py", "timeout=job.hedge_ms / 1000", "timeout=0", ["05"]),
+        # The hedge also goes when the first request already answered; the pause lets it reach the backend.
+        "a hedge after the win": ("fetch.py", "            if not done:\n",
+                                  "            if done:\n                requests.append(asyncio.create_task(get(url, 1000)))\n"
+                                  "                await asyncio.sleep(0.05)\n            if not done:\n",
+                                  ["05"]),
+        "a hedge after an early failure": ("fetch.py", "if done and first.exception() is not None:\n                return None",
+                                           "if done and first.exception() is not None:\n                done = set()",
+                                           ["adv-06"]),
+        "a timeout on the head alone": ("client.py", "            status, headers = parse_head(head)\n",
+                                        "            limit.reschedule(None)\n            status, headers = parse_head(head)\n",
+                                        ["03"]),
+        "a redirect followed": ("fetch.py", "        answer = await attempt(url, job, (ends_at - time.monotonic()) * 1000)\n",
+                                "        answer = await attempt(url, job, (ends_at - time.monotonic()) * 1000)\n"
+                                "        if answer is not None and 300 <= answer[0] <= 399:\n"
+                                "            answer = await attempt(url.rsplit('/', 1)[0] + '/redirected', job, 1000)\n",
+                                ["adv-05"]),
+        "no 64-bit bound": ("fetch.py", "or not -LIMIT <= value < LIMIT", "", ["adv-05"]),
     }
 
     def failing_cases(self, tree: Path, names: list[str]) -> list[str]:
@@ -314,7 +333,7 @@ class FanoutFaultTests(unittest.TestCase):
         for name in names:
             case = hidden / f"{name}.in"
             done = subprocess.run([sys.executable, "-I", str(hidden / "driver.py"), case.read_text(encoding="utf-8"),
-                                   sys.executable, "-s", "-E", str(tree / "solution.py")],
+                                   sys.executable, "-B", "-s", "-E", str(tree / "solution.py")],
                                   capture_output=True, text=True, timeout=120)
             if done.stdout != case.with_suffix(".out").read_text(encoding="utf-8"):
                 failing.append(name)
@@ -325,7 +344,8 @@ class FanoutFaultTests(unittest.TestCase):
         targets = sorted({name for *_, names in self.FAULTS.values() for name in names})
         with tempfile.TemporaryDirectory() as directory:
             tree = Path(directory) / "tree"
-            shutil.copytree(reference, tree)
+            # No bytecode: a fault of the same size written in the same second would reuse a stale .pyc.
+            shutil.copytree(reference, tree, ignore=shutil.ignore_patterns("__pycache__"))
             self.assertEqual(self.failing_cases(tree, targets), [])
             for fault, (module, right, wrong, names) in self.FAULTS.items():
                 with self.subTest(fault=fault):

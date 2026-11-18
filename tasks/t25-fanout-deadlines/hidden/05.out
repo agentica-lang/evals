@@ -5,3 +5,4 @@
 5 error status 404
 ok 4 of 5
 exit 0
+requests: a=2 b=1 c=2 d=2 e=2

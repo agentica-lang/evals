@@ -45,7 +45,8 @@ class State:
                 self.cancelled[name] = self.cancelled.get(name, 0) + 1
 
 
-def closed_by_client(connection):
+def client_ended(connection):
+    """True once the client sent its end: a close or a half-close (shutdown of its writing side), not told apart."""
     ready, _, _ = select.select([connection], [], [], 0)
     if not ready:
         return False
@@ -55,68 +56,116 @@ def closed_by_client(connection):
         return True
 
 
+REASONS = {200: "OK", 204: "No Content", 302: "Found", 404: "Not Found"}
+
+
+def final_status(step):
+    while True:
+        kind, _, rest = step.partition(":")
+        if kind == "delay":
+            step = rest.partition(":")[2]
+        elif kind == "drip":
+            step = rest
+        elif kind == "status":
+            return int(rest)
+        else:
+            return 200
+
+
+class Cancelled(Exception):
+    pass
+
+
 class Handler(http.server.BaseHTTPRequestHandler):
+    """A client that closes its connection cancels its request. A client may also half-close after sending; only
+    writing tells the two apart (a closed client answers data with a reset), so once the client's end arrives, the
+    handler sends the status line and an `X-Wait` header a byte at a time while it waits. A half-closed client reads
+    them as the start of a valid answer; a closed one makes a write fail."""
+
     protocol_version = "HTTP/1.1"
 
     def log_message(self, *args):
         pass
 
     def wait(self, milliseconds):
-        """Sleeps, and returns True when the client closed the connection meanwhile."""
         end = time.monotonic() + milliseconds / 1000
         while time.monotonic() < end:
-            if closed_by_client(self.connection):
-                return True
+            if self.waiting or client_ended(self.connection):
+                self.keep_alive_write()
             time.sleep(0.01)
-        return False
+
+    def keep_alive_write(self):
+        now = time.monotonic()
+        if not self.waiting:
+            self.waiting = True
+            self.connection.sendall(self.status_line + b"X-Wait: ")
+        elif now - self.wrote >= 0.05:
+            self.connection.sendall(b"w")
+        else:
+            return
+        self.wrote = now
 
     def do_GET(self):
         name = self.path.lstrip("/")
         step = self.server.state.begin(name)
-        cancelled = False
+        status = final_status(step)
+        self.status_line = f"HTTP/1.1 {status} {REASONS.get(status, 'Status')}\r\n".encode()
+        self.waiting = False
+        self.wrote = 0.0
+        self.ended = False
+        self.close_connection = True
         try:
-            cancelled = self.serve(step)
-        except OSError:
-            cancelled = True
-        finally:
-            self.server.state.end(name, cancelled)
-            self.close_connection = True
+            self.serve(name, step)
+        except (OSError, Cancelled):
+            self.end(name, True)
 
-    def serve(self, step, drip=False):
+    def end(self, name, cancelled):
+        if not self.ended:
+            self.ended = True
+            self.server.state.end(name, cancelled)
+
+    def serve(self, name, step, drip=False):
         kind, _, rest = step.partition(":")
         if kind == "delay":
             milliseconds, _, inner = rest.partition(":")
-            return self.wait(int(milliseconds)) or self.serve(inner, drip)
+            self.wait(int(milliseconds))
+            return self.serve(name, inner, drip)
         if kind == "drip":
-            return self.serve(rest, True)
+            return self.serve(name, rest, True)
         if kind == "hang":
-            return self.wait(30000)
+            self.wait(30000)
+            raise Cancelled()
         if kind == "reset":
             self.connection.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, b"\x01\x00\x00\x00\x00\x00\x00\x00")
             self.connection.close()
-            return False
-        status, body = 200, b""
+            self.end(name, False)
+            return
+        body = b""
         if kind == "ok":
             body = json.dumps({"value": int(rest)}).encode()
         elif kind == "status":
-            status, body = int(rest), b'{"error":"status"}'
+            body = b"" if int(rest) == 204 else b'{"error":"status"}'
         elif kind == "body":
             body = rest.encode()
-        self.send_response(status)
-        if 300 <= status < 400:
-            self.send_header("Location", "/redirected")
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
+        headers = ["Content-Type: application/json", f"Content-Length: {len(body)}", "Connection: close"]
+        if 300 <= final_status(step) < 400:
+            headers.append("Location: /redirected")
+        head = ("\r\n".join(headers) + "\r\n\r\n").encode()
+        head = (b"\r\n" if self.waiting else self.status_line) + head
+        if self.waiting:
+            # The last check: a client that closed since the last byte answers this write with a reset.
+            self.connection.sendall(b"w")
+            time.sleep(0.05)
         if not drip:
-            self.wfile.write(body)
-            return False
+            # Out of flight before the last write, so a client that starts the next URL at once is not counted twice.
+            self.end(name, False)
+            self.connection.sendall(head + body)
+            return
+        self.connection.sendall(head)
         for byte in body:
-            if self.wait(100):
-                return True
-            self.wfile.write(bytes([byte]))
-            self.wfile.flush()
-        return False
+            time.sleep(0.1)
+            self.connection.sendall(bytes([byte]))
+        self.end(name, False)
 
 
 class Server(socketserver.ThreadingMixIn, http.server.HTTPServer):
@@ -187,6 +236,7 @@ def main():
         elif check[0] == "cancelled":
             print(f"a slow request to /{check[1]} was cancelled: {'yes' if state.cancelled.get(check[1]) else 'no'}")
     sys.stderr.write(done.stderr.decode("utf-8", "replace"))
+    sys.stderr.write(f"PROGRAM-EXIT {done.returncode}\n")
 
 
 main()
