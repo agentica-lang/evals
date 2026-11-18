@@ -1,10 +1,10 @@
-FROM debian:trixie-slim AS go
+FROM debian:trixie-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2 AS go
 ARG GO_VERSION=1.27.4
 ARG GO_SHA256=7226736c2339719cda28fbf3a54d71aa63bcefe376e98cef00034268dab24840
 ADD --checksum=sha256:${GO_SHA256} https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz /go.tar.gz
 RUN tar -C /usr/local -xzf /go.tar.gz
 
-FROM node:22-trixie-slim
+FROM node:22-trixie-slim@sha256:68c76cfad89921b927eae28ba21407475e29d0ce450afcdbe70c1532db042b64
 
 ARG PI_VERSION=1.3.0
 ARG MYPY_VERSION=2.3.1

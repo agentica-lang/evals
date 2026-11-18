@@ -157,8 +157,12 @@ def git(*command: str, cwd: Path) -> str:
 def fetch_sources(commit: str) -> Path:
     """A sparse, shallow checkout of the Agentica commit under .cache; git checks the commit hash."""
     target = CACHE / f"agentica-{commit[:12]}"
-    if (target / ".git").is_dir() and git("rev-parse", "HEAD", cwd=target) == commit:
-        return target
+    try:
+        if (target / ".git").is_dir() and git("rev-parse", "HEAD", cwd=target) == commit:
+            return target
+    except subprocess.CalledProcessError:
+        pass  # a fetch that failed leaves a repository with no commit: clone again
+
     shutil.rmtree(target, ignore_errors=True)
     target.mkdir(parents=True)
     git("init", "-q", cwd=target)
@@ -181,15 +185,18 @@ def release_binary() -> Path:
     archive = CACHE / AGENTICA_ARCHIVE
     if not archive.is_file() or sha256_of(archive) != AGENTICA_ARCHIVE_SHA256:
         CACHE.mkdir(parents=True, exist_ok=True)
-        partial = archive.with_suffix(".part")
         url = f"{AGENTICA_REPO}/releases/download/{AGENTICA_VERSION}/{AGENTICA_ARCHIVE}"
-        with urllib.request.urlopen(url, timeout=120) as response, partial.open("wb") as handle:
-            shutil.copyfileobj(response, handle)
-        if sha256_of(partial) != AGENTICA_ARCHIVE_SHA256:
-            partial.unlink()
-            raise SystemExit(f"{url} does not match its pinned SHA-256")
-        partial.replace(archive)
-    binary = CACHE / f"agentica-{AGENTICA_VERSION}" / "agentica"
+        with tempfile.NamedTemporaryFile(dir=CACHE, prefix=f".{AGENTICA_ARCHIVE}.", delete=False) as handle:
+            partial = Path(handle.name)
+        try:
+            with urllib.request.urlopen(url, timeout=120) as response, partial.open("wb") as out:
+                shutil.copyfileobj(response, out)
+            if sha256_of(partial) != AGENTICA_ARCHIVE_SHA256:
+                raise SystemExit(f"{url} does not match its pinned SHA-256")
+            partial.replace(archive)
+        finally:
+            partial.unlink(missing_ok=True)
+    binary = CACHE / f"agentica-{AGENTICA_VERSION}-{AGENTICA_ARCHIVE_SHA256[:12]}" / "agentica"
     if not binary.is_file():
         member = f"agentica-{AGENTICA_VERSION}-linux-x86_64/bin/agentica"
         with tarfile.open(archive) as bundle:
@@ -1351,9 +1358,18 @@ def agentica_version() -> str:
     return done.stdout.strip() if done.returncode == 0 else ""
 
 
-def run_info(args: argparse.Namespace, image_info: dict[str, str | None]) -> dict:
+def agentica_info(args: argparse.Namespace, used: bool) -> dict:
+    """What run.json records of the Agentica under test; nothing when no arm runs Agentica."""
+    binary = RUNTIME / "bin" / "agentica"
+    return {"agentica_version": agentica_version() if used else None,
+            "agentica_commit": git_output("rev-parse", "HEAD", cwd=ROOT) if used else None,
+            "agentica_binary_sha256": sha256_of(binary) if used and binary.is_file() else None,
+            "agentica_override": args.agentica is not None, "agentica_src_override": args.agentica_src is not None}
+
+
+def run_info(args: argparse.Namespace, image_info: dict[str, str | None], agentica: dict | None = None) -> dict:
     return {"commit": git_output("rev-parse", "HEAD"), "dirty": bool(git_output("status", "--porcelain")),
-            "agentica_version": agentica_version(), "agentica_commit": git_output("rev-parse", "HEAD", cwd=ROOT),
+            **(agentica or {}),
             "agent": args.agent, "model": args.model or "default", "arms": args.arms, "tasks": args.tasks,
             "reps": args.reps, "timeout": args.timeout, "sandbox": args.sandbox, "image": args.image,
             "image_id": image_info["image_id"], "checker": image_info["checker"], "go": image_info.get("go"),
@@ -1603,8 +1619,9 @@ def main() -> int:
         validate_docker(args.image, pi=True)
         print(json.dumps(run_preflight(args)))
         return 0
-    use_sources(args.agentica_src)
-    install_runtime(args.agentica)
+    if agentica:
+        use_sources(args.agentica_src)
+        install_runtime(args.agentica)
     image_info: dict[str, str | None] = {"checker": None, "go": None, "image_id": None, "pi": None}
     if args.sandbox == "docker":
         image_info = validate_docker(args.image, typed, agentica, args.agent == "pi", "go" in args.arms)
@@ -1614,7 +1631,7 @@ def main() -> int:
     stamp = time.strftime("%Y%m%d-%H%M%S")
     results = EVAL / "results" / f"{stamp}-{args.agent}"
     results.mkdir(parents=True)
-    (results / "run.json").write_text(json.dumps({**run_info(args, image_info), "preflight": checked}, indent=2) + "\n",
+    (results / "run.json").write_text(json.dumps({**run_info(args, image_info, agentica_info(args, agentica)), "preflight": checked}, indent=2) + "\n",
                                       encoding="utf-8")
     jobs = run_order(args.tasks, args.arms, args.arm_tasks, args.reps)
     budget = Budget(args.max_cost, args.run_cost_estimate)
