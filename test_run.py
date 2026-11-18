@@ -349,7 +349,7 @@ class PrepareTests(unittest.TestCase):
                            key=lambda name: int(name[1:].split("-")[0]))
         self.assertEqual(available, ["t1-stats", "t2-fix-types", "t3-struct-change", "t4-word-count",
                                      "t5-scope-return", "t6-json-catalog", "t7-json-stream", "t8-enum-ledger",
-                                     "t9-inventory-orders"])
+                                     "t9-inventory-orders", "t10-calc-extend", "t12-member-ids"])
 
     def test_a_task_without_go_files_is_skipped_by_the_go_arm_only(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
