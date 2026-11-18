@@ -2,7 +2,7 @@ GET /nope
 DELETE /nope/1
 POST /health
 PUT /notes {"title":"a","body":"b"}
-PATCH /notes/1
+PUT /notes/1 {"title":"x","body":"y"}
 GET /notes/1/extra
 POST /notes {"title":"ünïcode ✓","body":"line\nbreak \"quoted\""}
 GET /notes/1

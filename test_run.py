@@ -353,6 +353,8 @@ class PrepareTests(unittest.TestCase):
             deps = root / "deps"
             (deps / "bond").mkdir(parents=True)
             (deps / "bond" / "bond.agc").write_text("# bond\n", encoding="utf-8")
+            (root / "docs" / "agentica-db").mkdir(parents=True)
+            (root / "docs" / "agentica-db" / "_index.md").write_text("# db\n", encoding="utf-8")
             runtime = root / "runtime"
             (runtime / "bin").mkdir(parents=True)
             with (patch.object(run, "TASKS", root / "tasks"), patch.object(run, "RUNTIME", runtime),
@@ -363,17 +365,22 @@ class PrepareTests(unittest.TestCase):
             files = {arm: sorted(path.name for path in (root / arm).iterdir()) for arm in ("binary", "go", "python")}
             go_mod = (root / "go" / "go.mod").read_text(encoding="utf-8")
             installed = (root / "binary" / "deps" / "bond" / "bond.agc").is_file()
+            documented = (root / "binary" / "docs" / "agentica-db" / "_index.md").is_file()
 
-        self.assertEqual(files, {"binary": ["agentica.lock", "agentica.toml", "bin", "deps", "start.agc", "task.md"],
+        self.assertTrue(documented)
+        self.assertEqual(files, {"binary": ["agentica.lock", "agentica.toml", "bin", "deps", "docs", "start.agc",
+                                            "task.md"],
                                  "go": ["go.mod", "go.sum", "task.md"], "python": ["task.md"]})
         self.assertTrue(installed)
         self.assertIn("go 1.27\n", go_mod)
         self.assertIn("require modernc.org/sqlite v", go_mod)
-        self.assertIn("agentica-lang.com/bond/llms.txt", prompts["binary"])
+        self.assertIn("agentica-lang.com/bond/0.15.1/llms.txt", prompts["binary"])
+        self.assertIn("docs/agentica-db/", prompts["binary"])
+        self.assertNotIn("agentica-lang.com/llms.txt", prompts["binary"])
         self.assertIn("modernc.org/sqlite", prompts["go"])
         self.assertNotIn("llms.txt", prompts["python"] + prompts["go"])
 
-    def test_the_ecosystem_packages_are_installed_once_from_the_lock(self) -> None:
+    def test_the_ecosystem_packages_are_installed_from_the_lock_on_every_round(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             agentica = root / "runtime" / "bin" / "agentica"
@@ -381,16 +388,28 @@ class PrepareTests(unittest.TestCase):
             agentica.write_text("#!/bin/sh\n[ -f agentica.lock ] && mkdir -p deps/bond && echo run >> ../installs\n",
                                 encoding="utf-8")
             agentica.chmod(0o755)
+            docs = root / "db-docs"
+            (docs / "site" / "content").mkdir(parents=True)
+            (docs / "site" / "content" / "_index.md").write_text("# db\n", encoding="utf-8")
+            fetched = []
             cache = root / "cache"
             with (patch.object(run, "CACHE", cache), patch.object(run, "RUNTIME", root / "runtime"),
-                  patch.object(run, "ECOSYSTEM_DEPS", None)):
+                  patch.object(run, "ECOSYSTEM_DEPS", None),
+                  patch.object(run, "fetch_sources", lambda commit, *rest: fetched.append(commit) or docs)):
                 first = run.ecosystem_deps()
                 second = run.ecosystem_deps()
             installs = (cache / "installs").read_text(encoding="utf-8")
+            copied = (first.parent / "docs" / "agentica-db" / "_index.md").is_file()
+            binary_sha = run.sha256_of(agentica)
 
+        lock = (run.ECOSYSTEM / "agentica.lock").read_text(encoding="utf-8")
         self.assertEqual(first, second)
-        self.assertEqual(first.parent.name, f"ecosystem-{run.sha256_of(run.ECOSYSTEM / 'agentica.lock')[:12]}")
-        self.assertEqual(installs, "run\n")
+        self.assertEqual(first.parent.name, f"ecosystem-{run.sha256_of(run.ECOSYSTEM / 'agentica.lock')[:12]}-"
+                                            f"{binary_sha[:12]}")
+        self.assertEqual(installs, "run\nrun\n")
+        self.assertTrue(copied)
+        self.assertEqual(len(set(fetched)), 1)
+        self.assertIn(f'commit = "{fetched[0]}"', lock.split('name = "db"')[1].split("[[package]]")[0])
 
     def test_the_tasks_available_in_go(self) -> None:
         # Each part of the Go arm adds its tasks here.
@@ -1624,10 +1643,12 @@ class DockerGradingTests(unittest.TestCase):
         if run.go_probe(run.DEFAULT_IMAGE)[0] != 0:
             self.skipTest("evaluation image has no Go")
         run.ensure_go(run.DEFAULT_IMAGE)
-        sqlite = ('package main\n\nimport (\n\t"database/sql"\n\t"fmt"\n\n\t_ "modernc.org/sqlite"\n)\n\n'
+        # It prints 6 only when the module cache is read-only and GOPROXY is off where the program runs.
+        sqlite = ('package main\n\nimport (\n\t"database/sql"\n\t"fmt"\n\t"os"\n\n\t_ "modernc.org/sqlite"\n)\n\n'
                   'func main() {\n\tdb, _ := sql.Open("sqlite", ":memory:")\n\tvar n int\n'
                   '\tif err := db.QueryRow("select 3 * 2").Scan(&n); err != nil {\n\t\tpanic(err)\n\t}\n'
-                  '\tfmt.Println(n)\n}\n')
+                  '\tif os.WriteFile("/opt/go-mod/probe", nil, 0o644) == nil || os.Getenv("GOPROXY") != "off" {\n'
+                  '\t\tn = -1\n\t}\n\tfmt.Println(n)\n}\n')
         missing = 'package main\n\nimport "golang.org/x/text/language"\n\nfunc main() { println(language.English.String()) }\n'
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
