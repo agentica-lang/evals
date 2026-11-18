@@ -62,7 +62,9 @@ def tokenize(text: str) -> list[Token]:
             j = i
             while j < len(text) and text[j].isascii() and text[j].isdigit():
                 j += 1
-            number = int(text[i:j])
+            digits = text[i:j].lstrip("0") or "0"
+            # Checked by length first: int() refuses very long digit strings.
+            number = int(digits) if len(digits) <= 19 else MAX_INT + 1
             if number > MAX_INT:
                 raise ConfError("E-NUMBER", line, col)
             tokens.append(Token("int", text[i:j], line, col, number=number))
