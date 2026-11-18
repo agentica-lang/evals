@@ -1,8 +1,9 @@
 # Agentica evals
 
 The agent evaluation of Agentica: tasks, a runner that gives each task to an
-agent in a Docker sandbox, and the grading against hidden cases. `README.md`
-explains the arms, the measures and the results.
+agent in a Docker sandbox, and the grading against hidden cases. `README.md` is
+the entry page; `docs/` holds the arms, the tasks, how to run, the results and
+the benchmarks.
 
 ## Map
 
@@ -18,6 +19,8 @@ ecosystem/          the pinned packages of the ecosystem tasks
 .secrets/           provider auth files (never committed)
 results/            run output (never committed)
 bench/              the benchmark twins: run.py, measure.py, go/ (make bench)
+docs/               the pages behind README.md: arms, tasks, running, results,
+                    benchmarks
 ```
 
 ## Commands
