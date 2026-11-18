@@ -32,8 +32,9 @@ create table if not exists todos (id integer primary key, title text not null)
   to record the schema version).
 - A todo is `{"id":ID,"title":"TITLE","priority":P}` in every answer.
 - `POST /todos`: the body is a JSON object with `title`, a non-empty string,
-  and an optional `priority`, an integer from 1 to 3 (not a boolean, not a
-  decimal), 2 when it is missing; other keys are ignored. The answer is `201`
+  and an optional `priority`, an integer from 1 to 3 written as digits (not a
+  boolean, and not a decimal or an exponent such as `2.0` or `1e0`), 2 when it
+  is missing; other keys are ignored. The answer is `201`
   with the new todo. Any other body is `400` with `{"error":"invalid todo"}`,
   and nothing is inserted.
 - `GET /todos`: `200` with `{"todos":[...]}`, by `id` ascending, as before.
