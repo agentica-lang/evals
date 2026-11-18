@@ -266,10 +266,11 @@ class FaultTests(unittest.TestCase):
         failing = []
         for name in names:
             case = hidden / f"{name}.in"
-            done = subprocess.run([sys.executable, "-I", str(hidden / "driver.py"), case.read_text(encoding="utf-8"),
+            # Bytes, so a CRLF case keeps its CR.
+            done = subprocess.run([sys.executable, "-I", str(hidden / "driver.py"), case.read_bytes().decode("utf-8"),
                                    sys.executable, "-B", "-s", "-E", str(tree / "solution.py")],
                                   capture_output=True, text=True, timeout=120)
-            if done.stdout != case.with_suffix(".out").read_text(encoding="utf-8"):
+            if done.stdout != case.with_suffix(".out").read_bytes().decode("utf-8"):
                 failing.append(name)
         return failing
 
@@ -1261,8 +1262,7 @@ class CaseCommandTests(unittest.TestCase):
         for task in sorted(path for path in run.TASKS.iterdir() if path.is_dir()):
             with self.subTest(task=task.name):
                 self.assertTrue((task / "task.md").is_file())
-                # A tree task's references may come one language per change; Python comes first.
-                for ext in ("py",) if run.tree_task(task.name) else ("agc", "py"):
+                for ext in ("agc", "py", "go") if run.tree_task(task.name) else ("agc", "py"):
                     reference = (task / "reference" / ext / f"solution.{ext}" if run.tree_task(task.name)
                                  else task / f"reference.{ext}")
                     self.assertTrue(reference.is_file(), reference)
