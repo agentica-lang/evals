@@ -25,40 +25,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && usermod --login agent --home /home/agent --move-home node
 
 COPY --from=go /usr/local/go /usr/local/go
-# The root file system is read-only at run time, so the build cache is warmed here for the standard packages the Go
-# arm uses; Go reads a read-only cache and compiles a missing package without storing it.
+# The root file system is read-only at run time, so the build cache is warmed here for the whole public standard
+# library (`go list std` without internal, vendor and cmd): Go reads a read-only cache but cannot add to it, and a
+# package it has never indexed is then "not in std".
 ENV GOCACHE=/opt/go-cache GOPATH=/tmp/go GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local CGO_ENABLED=0
-COPY <<EOF /opt/go-warm/main.go
-package main
-
-import (
-	_ "bufio"
-	_ "bytes"
-	_ "encoding/csv"
-	_ "encoding/json"
-	_ "errors"
-	_ "fmt"
-	_ "io"
-	_ "maps"
-	_ "math"
-	_ "net"
-	_ "net/http"
-	_ "os"
-	_ "path/filepath"
-	_ "regexp"
-	_ "slices"
-	_ "sort"
-	_ "strconv"
-	_ "strings"
-	_ "time"
-	_ "unicode"
-	_ "unicode/utf8"
-)
-
-func main() {}
-EOF
 RUN ln -s /usr/local/go/bin/go /usr/local/go/bin/gofmt /usr/local/bin/ \
-    && cd /opt/go-warm && printf 'module warm\n\ngo 1.27\n' > go.mod \
+    && mkdir /opt/go-warm && cd /opt/go-warm && printf 'module warm\n\ngo 1.27\n' > go.mod \
+    && { printf 'package main\n\nimport (\n'; \
+         go list std | grep -vE '(^|/)(internal|vendor)(/|$)|^cmd/|^(runtime/cgo|runtime/race|plugin)$' \
+           | sed 's/.*/\t_ "&"/'; \
+         printf ')\n\nfunc main() {}\n'; } > main.go \
     && go vet . && go build -o /dev/null . \
     && chmod -R a+rX /opt/go-cache && rm -rf /opt/go-warm /tmp/go
 

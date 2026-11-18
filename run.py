@@ -47,9 +47,11 @@ CHECK_TIMEOUT = 90
 # The go arm checks with `go vet` and then `go build`, in file mode: start.go sits next to solution.go, and both are
 # package main.
 GO_VET = ["go", "vet", "solution.go"]
-GO_BUILD = ["go", "build", "-o", "solution", "solution.go"]
+# -gcflags=-e lists every compile error, not the first ten.
+GO_BUILD = ["go", "build", "-gcflags=-e", "-o", "solution", "solution.go"]
 GO_FILE_ERROR = re.compile(r"^(?:vet: )?\S+\.go:\d+(?::\d+)?: ", re.MULTILINE)
-NET_STRONG = re.compile(r"\bwget\b|\bgit\s+clone\b|github\.com|\bpip3?\s+install\b|\bnpm\b|\bapt(?:-get)?\b")
+NET_STRONG = re.compile(r"\bwget\b|\bgit\s+clone\b|github\.com|\bpip3?\s+install\b|\bnpm\b|\bapt(?:-get)?\b"
+                        r"|\bgo\s+(?:-C\s+\S+\s+)?(?:get|install|mod\s+download)\b|\bGOPROXY=|golang\.org")
 NET_WEAK = re.compile(r"\bcurl\b|\burllib\b")
 LOOPBACK = re.compile(r"\blocalhost\b|127\.0\.0\.1")
 # A segment may open with a keyword, a group or a substitution, then wrappers: `env` (options, NAME=value),
@@ -59,16 +61,20 @@ WRAPPER = (r"(?:(?:\S*/)?env(?:\s+(?:-u\s+\S+|-\S+|\w+=\S*))*|time(?:\s+-p)?"
            r"|timeout(?:\s+(?:-[sk]\s+\S+|-\S+))*\s+\d\S*|nohup|xargs(?:\s+(?:-[nILPdsE]\s*\S+|-\S+))*"
            r"|uv\s+run|\w+=\S*)")
 COMMAND_PREFIX = rf"^\s*{SEGMENT_OPENER}(?:{WRAPPER}\s+)*"
+# The go command, also with `-C DIR` before the subcommand.
+GO = r"(?:\S*/)?go\s+(?:-C\s+\S+\s+)?"
 CHECK_COMMAND = re.compile(COMMAND_PREFIX + r"(?:(?:python3?\s+-m\s+)?(?:\S*/)?mypy|(?:\S*/)?agentica\s+check"
-                           r"|(?:\S*/)?go\s+(?:vet|build))\b")
+                           rf"|{GO}(?:vet|build))\b")
+VET_COMMAND = re.compile(COMMAND_PREFIX + GO + r"vet\b")
+BUILD_COMMAND = re.compile(COMMAND_PREFIX + GO + r"build\b(?P<args>.*)")
 MYPY_COMMAND = re.compile(COMMAND_PREFIX + r"(?:python3?\s+-m\s+)?(?:\S*/)?mypy\b")
 # A check or run call starts a shell segment with the program; a path that names it (`cat skills/agentica-programming/x`)
 # is no call.
 RUN_COMMAND = re.compile(COMMAND_PREFIX + r"(?:\S*/)?(?:agentica(?:-real)?|python3?(?:\.\d+)?|mypy"
-                         r"|go\s+(?:vet|build|run|test))(?=\s|$)")
+                         rf"|{GO}(?:vet|build|run|test))(?=\s|$)")
 SHELL_SCRIPT = re.compile(COMMAND_PREFIX + r"(?:\S*/)?(?:ba)?sh\s+(?:-[a-z]+\s+)*?-[a-z]*c[a-z]*\s+"
                           r"(?:'([^']*)'|\"((?:[^\"\\]|\\.)*)\")")
-GO_COMMAND = re.compile(COMMAND_PREFIX + r"(?:\S*/)?go\s+(?:vet|build|run|test)\b")
+GO_COMMAND = re.compile(COMMAND_PREFIX + GO + r"(?:vet|build|run|test)\b")
 # `go vet` puts "vet: " before the first type error of a file it cannot load.
 GO_ERROR = re.compile(r"^\s*(?:vet: )?\S+\.go:\d+(?::\d+)?: |^panic: |^\s*--- FAIL", re.MULTILINE)
 # The common shell forms that write the solution: a redirection (a `cat` heredoc too), `tee`, `sed -i`, `cp` or `mv`
@@ -227,12 +233,15 @@ def clone_rootfs(template: Path, destination: Path) -> Path:
     return destination
 
 
+# The Go language version of the image (`1.27`), set by ensure_go.
+GO_LANGUAGE: str | None = None
+
+
 def go_mod() -> str:
-    """The go.mod of a workspace: module `solution`, at the Go version of the image's pin."""
-    found = re.search(r"^ARG GO_VERSION=(\d+\.\d+)", (EVAL / "Dockerfile").read_text(encoding="utf-8"), re.MULTILINE)
-    if not found:
-        raise SystemExit("Dockerfile has no ARG GO_VERSION")
-    return f"module solution\n\ngo {found.group(1)}\n"
+    """The go.mod of a workspace: module `solution`, at the Go version of the image."""
+    if GO_LANGUAGE is None:
+        raise SystemExit("the go arm needs the image's Go version: validate the image first")
+    return f"module solution\n\ngo {GO_LANGUAGE}\n"
 
 
 def start_file(task: str, arm: str) -> Path:
@@ -365,7 +374,8 @@ def prompt(work: Path, arm: str) -> str:
         lines.append("Write a complete Go program to solution.go, in package main, with the standard library only; "
                      "go.mod is ready. Run programs with `go run solution.go`. The checkers are "
                      "`go vet solution.go` and `go build solution.go`, on your PATH: the solution must pass both, "
-                     "so do not silence them.")
+                     "so do not silence them. Where the task names `sys.argv` or Python's HTTP modules, use "
+                     "`os.Args` and `net/http`.")
     else:
         lines.append("Write a complete Python 3 program to solution.py. Run programs with `python3`.")
     lines.append("Work only inside the current directory. Test your program before you finish, then reply with one sentence.")
@@ -502,7 +512,7 @@ def runtime_probe(image: str) -> tuple[bool, str]:
 
 def go_probe(image: str) -> tuple[int | None, str, str]:
     with tempfile.TemporaryDirectory(prefix="agentica-go-probe-") as directory:
-        return probe(image, ["go", "version"], Path(directory), 60)
+        return probe(image, ["go", "env", "GOVERSION"], Path(directory), 60)
 
 
 def ensure_tool(image: str, run_probe: Callable[[str], tuple[int | None, str, str]], command: str, arm: str) -> str:
@@ -525,7 +535,13 @@ def ensure_checker(image: str) -> str:
 
 
 def ensure_go(image: str) -> str:
-    return ensure_tool(image, lambda name: go_probe(name), "go version", "go")
+    global GO_LANGUAGE
+    version = ensure_tool(image, lambda name: go_probe(name), "go env GOVERSION", "go")
+    found = re.match(r"go(\d+\.\d+)", version)
+    if found is None:
+        raise SystemExit(f"go env GOVERSION in {image} printed {version!r}, not a release version")
+    GO_LANGUAGE = found.group(1)
+    return version
 
 
 def ensure_runtime(image: str) -> None:
@@ -837,10 +853,31 @@ def writes_solution(command: str) -> bool:
     return any(SHELL_EDIT.search(part) for part in command_parts(command))
 
 
-def command_failed(command: str, text: str) -> bool:
+def built_binaries(command: str) -> set[str]:
+    """The programs a `go build` in the command writes: the `-o` path, or the name of the first .go file."""
+    names: set[str] = set()
+    for part in command_parts(command):
+        build = BUILD_COMMAND.match(part)
+        if build is None:
+            continue
+        words = build["args"].split()
+        if "-o" in words[:-1]:
+            names.add(words[words.index("-o") + 1])
+        else:
+            names.update(word.removesuffix(".go") for word in words if word.endswith(".go"))
+    return {Path(name).name for name in names}
+
+
+def runs_binary(command: str, binaries: set[str]) -> bool:
+    """A call of a program a `go build` made, through a path (`./solution`, `/tmp/s`)."""
+    return any(match and Path(match[1]).name in binaries
+               for match in (re.match(COMMAND_PREFIX + r"(\S*/\S+)(?=\s|$)", part) for part in command_parts(command)))
+
+
+def command_failed(command: str, text: str, binary: bool = False) -> bool:
     if "error[" in text or "Traceback" in text or "SyntaxError" in text:
         return True
-    if runs_go(command) and GO_ERROR.search(text):
+    if (binary or runs_go(command)) and GO_ERROR.search(text):
         return True
     return runs_mypy(command) and ": error:" in text
 
@@ -860,10 +897,15 @@ def call_metrics(calls: list[Call]) -> dict[str, int]:
 
     A fix round is a failed check or run call followed by an edit (an edit tool, or a shell command that writes the
     solution) before the next check or run call. Failures that are never edited, or that another check follows
-    first, are not rounds."""
+    first, are not rounds.
+
+    A `go build` right after a `go vet` call (no edit or other run between) finishes that check: it is one check
+    run, and one failure at most."""
     m = {"interpreter_runs": 0, "failing_runs": 0, "check_runs": 0, "check_failures": 0, "fix_rounds": 0,
          "outside_reads": 0, "net_commands": 0, "query_runs": 0, "read_runs": 0}
     awaiting_fix = False
+    binaries: set[str] = set()
+    vet_open: bool | None = None  # None, or whether the open `go vet` call failed
     for call in calls:
         if str(EVAL) in json.dumps(call.args):
             m["outside_reads"] += 1
@@ -874,18 +916,29 @@ def call_metrics(calls: list[Call]) -> dict[str, int]:
         elif edits_solution(call) or writes_solution(command):
             m["fix_rounds"] += awaiting_fix
             awaiting_fix = False
+            vet_open = None
         if not command:
             continue
         m["query_runs"] += is_query_command(command)
         m["read_runs"] += is_read_command(command)
-        if runs_program(command):
+        binary = runs_binary(command, binaries)
+        if runs_program(command) or binary:
             check = is_check_command(command)
-            failed = command_failed(command, call.output)
+            failed = command_failed(command, call.output, binary)
+            vetted = any(VET_COMMAND.match(part) for part in command_parts(command))
+            built = any(BUILD_COMMAND.match(part) for part in command_parts(command))
+            merged = built and not vetted and vet_open is not None
+            if merged:
+                check = False
+                m["check_failures"] += failed and not vet_open
+                failed = failed and not vet_open
             m["interpreter_runs"] += 1
             m["check_runs"] += check
             m["failing_runs"] += failed
             m["check_failures"] += failed and check
-            awaiting_fix = failed
+            awaiting_fix = failed or (merged and bool(vet_open) and awaiting_fix)
+            vet_open = failed if vetted and not built else None
+            binaries |= built_binaries(command)
     return m
 
 
@@ -1038,7 +1091,8 @@ def type_check(contained: Contained, total: int) -> dict | None:
 
 
 def go_check(contained: Contained, built: Contained, total: int) -> dict | None:
-    """`go vet`, then `go build` into the workspace; None when both pass, else the failing row."""
+    """`go vet`, then `go build` into the workspace; None when both pass, else the failing row. `go vet` stops at
+    the first type error (its `vet: ` line), so then the build runs too and its errors are the count."""
     for step, command, run_step in (("vet", GO_VET, contained), ("build", GO_BUILD, built)):
         out, err, returncode = run_step(command, "", CHECK_TIMEOUT)
         if returncode == 0:
@@ -1048,8 +1102,13 @@ def go_check(contained: Contained, built: Contained, total: int) -> dict | None:
                     "check_errors": 0}
         text = out + err
         kind, code = ("syntax", "syntax") if "syntax error" in text else ("check", step)
+        errors = len(GO_FILE_ERROR.findall(text))
+        if step == "vet" and re.search(r"^vet: ", text, re.MULTILINE):
+            build_out, build_err, build_code = built(GO_BUILD, "", CHECK_TIMEOUT)
+            if build_out is not None and build_code != 0:
+                errors = max(errors, len(GO_FILE_ERROR.findall(build_out + build_err)))
         return {"status": "fail", "passed": 0, "total": total, "failure": kind, "code": code,
-                "check_errors": len(GO_FILE_ERROR.findall(text))}
+                "check_errors": errors}
     return None
 
 
@@ -1305,6 +1364,37 @@ def run_info(args: argparse.Namespace, image_info: dict[str, str | None]) -> dic
             "arm_notes": {arm: NOCLI_NOTE for arm in args.arms if arm == "skill-nocli"}}
 
 
+def start_outcome(args: argparse.Namespace, scratch: Path, task: str, arm: str) -> tuple:
+    start = start_file(task, arm)
+    work = scratch / f"{task}-{arm}-start"
+    work.mkdir()
+    solution = work / f"solution.{ARMS[arm]}"
+    shutil.copyfile(start, solution)
+    row = grade(solution, task, arm, args, scratch, f"{task}-{arm}-start")
+    return row["status"], row["passed"], row["failure"]
+
+
+def check_starts(args: argparse.Namespace) -> int:
+    """Each start.go must grade like the typed Python start: the same status, passed cases and failure kind."""
+    tasks = [task for task in args.tasks if (TASKS / task / "start.go").is_file()]
+    with tempfile.TemporaryDirectory(prefix="agentica-eval-starts-") as directory, \
+            ThreadPoolExecutor(max_workers=args.jobs) as pool:
+        scratch = Path(directory)
+        futures = {(task, arm): pool.submit(start_outcome, args, scratch, task, arm)
+                   for task in tasks for arm in ("typed-python", "go")}
+        outcomes = {key: future.result() for key, future in futures.items()}
+    differ = []
+    for task in tasks:
+        python, go = outcomes[task, "typed-python"], outcomes[task, "go"]
+        print(f"{task}: python {python}, go {go}{'' if python == go else '  DIFFER'}")
+        if python != go:
+            differ.append(task)
+    if differ:
+        print("starts that differ: " + ", ".join(differ))
+        return 1
+    return 0
+
+
 def use_sources(checkout: Path | None) -> None:
     global ROOT
     ROOT = checkout.resolve() if checkout is not None else fetch_sources(AGENTICA_COMMIT)
@@ -1450,6 +1540,9 @@ def main() -> int:
                         help="skip the preflight: one tiny Pi call with the round's model, auth and image that "
                              "checks the auth, the model, the tokens and the cost source before any task runs")
     parser.add_argument("--preflight-only", action="store_true", help="run the preflight alone and exit")
+    parser.add_argument("--check-starts", action="store_true",
+                        help="grade each start.go and its typed Python start as solutions and exit 1 when their "
+                             "status, passed cases or failure kind differ (no model, no credentials)")
     parser.add_argument("--check-references", action="store_true",
                         help="grade every reference solution (no model, no credentials) and exit 1 if one fails; "
                              f"arms default to {' '.join(REFERENCE_ARMS)}")
@@ -1457,14 +1550,16 @@ def main() -> int:
     if args.summarize:
         summarize(Path(args.summarize))
         return 0
-    if args.check_references:
+    if args.check_references or args.check_starts:
         args.agent = "reference"
         args.pass_env = []
+    if args.check_starts:
+        args.arms = ["typed-python", "go"]
     args.arms = args.arms or (REFERENCE_ARMS if args.check_references else DEFAULT_ARMS)
     args.arm_tasks = parse_arm_tasks(args.arm_tasks, args.arms, args.tasks)
     if args.max_cost is not None and args.max_cost <= 0:
         raise SystemExit("--max-cost must be more than 0")
-    if args.check_references:
+    if args.agent == "reference":
         args.pi_auth = None
     if args.pi_auth is not None:
         if args.agent != "pi" or args.sandbox != "docker":
@@ -1501,6 +1596,8 @@ def main() -> int:
     image_info: dict[str, str | None] = {"checker": None, "go": None, "image_id": None, "pi": None}
     if args.sandbox == "docker":
         image_info = validate_docker(args.image, typed, agentica, args.agent == "pi", "go" in args.arms)
+    if args.check_starts:
+        return check_starts(args)
     checked = run_preflight(args) if preflight else None
     stamp = time.strftime("%Y%m%d-%H%M%S")
     results = EVAL / "results" / f"{stamp}-{args.agent}"

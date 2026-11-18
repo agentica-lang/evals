@@ -107,17 +107,21 @@ it needs `mypy` for the typed arm. Docker is the only sandbox tested with the
 typed arm, the drivers and the loopback peers; Firejail is untested for them.
 The results go to `results/`, which is not versioned. Each run directory has a
 `run.json` with the commit, the Agentica version and source commit, the checker
-version, the Pi version, the model, the arms, and the image
+version, the Go version, the Pi version, the model, the arms, and the image
 name and ID, next to `results.jsonl` and `summary.md`. The runner has its own
-tests: `python3 -m unittest discover -p 'test_*.py'`. CI runs them and
-`--check-references` on every pull request (no model calls).
+tests: `python3 -m unittest discover -p 'test_*.py'`. CI runs them,
+`--check-references` and `--check-starts` on every pull request (no model
+calls).
 
 `--check-references` is the same as `--agent reference` with the arms `binary`,
 `python`, `typed-python` and `go` (the three Agentica arms share one
-reference). It
-copies each `reference.*` as the solution, grades it like an agent's, prints the
-table, and exits 1 when a reference fails. Use it after any change to a task,
-the runner, the image or the Agentica version.
+reference). It copies each `reference.*` as the solution, grades it like an
+agent's, prints the table, and exits 1 when a reference fails. Use it after any
+change to a task, the runner, the image or the Agentica version.
+
+`--check-starts` grades each `start.go` and the typed Python start of its task
+as solutions, and exits 1 when their status, passed cases or failure kind
+differ, so a Go start keeps the bugs of the Python one.
 
 ### The Agentica under test
 
@@ -210,12 +214,15 @@ by weakening its options.
   the arms: `summary.md` shows their mean in the `type escapes` column.
 - Measures: `interpreter_runs` counts every bash call that runs `agentica`,
   `python`, `mypy` or `go vet|build|run|test`; `check_runs` counts the calls
-  to `mypy`, `agentica check`, `go vet` and `go build` (both a lower bound: a
+  to `mypy`, `agentica check`, `go vet` and `go build`, with a `go build`
+  right after a `go vet` call (no edit or other run between) counted with it as
+  one check (both a lower bound: a
   command is recognised at the start of a shell segment, also after `do`,
   `then`, `else`, `!`, `{`, `(`, `$(` or a backtick, after the `env`, `time`,
   `timeout`, `nohup`, `xargs`, `uv run` and `NAME=value` prefixes, and inside
   `bash -c` or `sh -c`, so a run through another wrapper or a script is not
-  counted).
+  counted). A program that a `go build` wrote, run through a path
+  (`./solution`, `/tmp/s`), is a run too, and its `panic:` a failure.
   Before 2026-11-18 a call that only named one of them, such as a `sed` of the
   skill's files, also counted, in `interpreter_runs` and, when its output held
   an error line, in `failing_runs`. That inflated the skill arm, so rounds 1–15
@@ -224,9 +231,9 @@ by weakening its options.
   `error[...]` diagnostic); `failing_runs` counts every failing call, checks
   included, so repairs are compared with the checker calls on both sides.
   Tokens, turns, cost and seconds are the same as in the Agentica arms.
-  `diagnostics.py` still counts Agentica diagnostics only. `go vet` and
-  `go build` count as checks too, and a `file.go:N:M:` or `panic:` line as a
-  failure, ready for a Go arm. Only `--agent pi` reports calls:
+  `diagnostics.py` still counts Agentica diagnostics only. A `file.go:N:M:` or
+  `panic:` line is a failure of a Go call (see "The Go arm"). Only
+  `--agent pi` reports calls:
   `--agent claude` gives totals, so its interpreter, check and failing runs
   read 0, which means not measured.
 - Starts: `start.py` of t9 to t19 is typed and passes `mypy --strict`. For t2,
@@ -246,19 +253,29 @@ start. The prompt gives `go run solution.go` and the two checkers,
 `go vet solution.go` and `go build solution.go`, and says not to silence them.
 
 - Toolchain: Go 1.27.4, pinned with its SHA-256 in `Dockerfile`;
-  `run.json` records `go version`. The image sets `GOFLAGS=-mod=mod`,
-  `GOPROXY=off`, `GOTOOLCHAIN=local` and `CGO_ENABLED=0`, so nothing is
-  downloaded, and carries a read-only build cache of the standard packages
-  the tasks use (`GOCACHE=/opt/go-cache`), so a check takes under a second
-  instead of half a minute.
+  `run.json` records `go env GOVERSION`, and the workspace `go.mod` takes its
+  language version from it. The image sets `GOFLAGS=-mod=mod`, `GOPROXY=off`,
+  `GOTOOLCHAIN=local` and `CGO_ENABLED=0`, so Go works offline by default; the
+  agent container has network, so an agent that sets `GOPROXY` itself can
+  still download (`net_commands` counts `go get`, `go install`,
+  `go mod download`, `GOPROXY=` and `golang.org`). The image carries a
+  read-only build cache of the whole public standard library (every
+  `go list std` package outside `internal`, `vendor` and `cmd`;
+  `GOCACHE=/opt/go-cache`, about 160 MB). Go reads a read-only cache but cannot
+  add to it, and a package it never indexed is "not in std", so the cache must
+  hold them all; a check then takes under a second instead of half a minute.
 - Grading: `go vet solution.go`, then `go build -o solution solution.go`, in a
   fresh container with the workspace writable for the binary. A failure is
   `failure: check` with `code` `vet` or `build` (`syntax` for a syntax error)
-  and `check_errors`, the number of `file.go:line:` lines. The hidden cases then
-  run the binary. A `panic:` is `failure: runtime`, code `panic`.
-- Starts: `start.go` keeps the bugs of `start.py`. The t2 and t5 starts do not
-  compile, like the typed starts; the other starts give the output of
-  `start.py` on the hidden cases.
+  and `check_errors`, the number of `file.go:line:` lines. `go vet` type-checks
+  first and stops at the first type error (an unused variable is one, so its
+  code is `vet`); then the grader also runs `go build -gcflags=-e` and counts
+  its errors, so the t2 start has 6, not 1. The hidden cases then run the
+  binary. A `panic:` is `failure: runtime`, code `panic`.
+- Starts: `start.go` keeps the bugs of `start.py` and has `//go:build ignore`,
+  so `go build .` leaves it out. The t2 and t5 starts do not compile, like the
+  typed starts; the other starts give the output of `start.py` on the hidden
+  cases, and `--check-starts` checks that they grade alike.
 
 What is not equal to the other arms:
 
@@ -269,10 +286,25 @@ What is not equal to the other arms:
   enum with exhaustive `case` (t8, t13) or a `Result[Int]` / `int | None` (t14).
   Go has no sum types or exhaustive switch, so the reference uses an interface
   with a type switch and `(int, bool)`, and nothing checks a missing case.
+- t13 asks for a new variant handled everywhere (`assert_never` in Python, an
+  exhaustive `case` in Agentica). The Go start uses type switches with a
+  `panic` default, so a missing case is a runtime failure, not a check failure.
+- t2 prints floats as Python does (`5.0`, `0.25`); Go has no such format, so
+  the Go reference formats them by hand.
+- The task text of t17, t18 and t20 names `sys.argv`, `System.args()` and the
+  Python or Agentica HTTP modules; the Go prompt adds that these are `os.Args`
+  and `net/http`.
 - Go is strict where the other checkers are not: an unused variable or import
-  is a build error, so a draft fails more checks.
-- The arm runs in Docker only (`/tmp` is mounted `exec` so that `go run`
-  works). The Firejail sandbox refuses it.
+  is a compile error, so a draft fails more checks. `go vet` also runs analyses
+  that are not type checks (`printf` formats, copied locks, unreachable code),
+  which mypy and `agentica check` do not have.
+- The check is two commands, each with the 90-second checker limit, where the
+  other arms have one.
+- The arm runs in Docker only. The Firejail sandbox refuses it. For `go run`
+  the `/tmp` tmpfs of every container is now mounted `exec` with 256 MB; rounds
+  before the Go arm had it `noexec`.
+- The image is `linux/amd64` only (the Go archive is), and the Dockerfile needs
+  BuildKit (`ADD --checksum`).
 
 ### Spend and fix rounds
 

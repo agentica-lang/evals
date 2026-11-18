@@ -23,3 +23,5 @@ jobs:
         run: python3 -m unittest discover -p 'test_*.py'
       - name: Reference solutions (no model calls)
         run: python3 run.py --check-references --jobs 4
+      - name: Go starts grade like the Python starts (no model calls)
+        run: python3 run.py --check-starts --jobs 4

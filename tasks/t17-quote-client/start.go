@@ -1,3 +1,5 @@
+//go:build ignore
+
 package main
 
 import (
@@ -5,7 +7,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
 	"strconv"
@@ -19,16 +20,16 @@ func quote(base, item string, quantity int) string {
 	body, _ := json.Marshal(map[string]any{"name": item, "qty": quantity})
 	response, err := client.Post(base+"/quotes", "text/plain", bytes.NewReader(body))
 	if err != nil {
-		log.Fatal(err)
+		panic(err)
 	}
 	defer response.Body.Close()
 	var reply map[string]any
 	if err := json.NewDecoder(response.Body).Decode(&reply); err != nil {
-		log.Fatal(err)
+		panic(err)
 	}
 	total, found := reply["total"]
 	if !found {
-		log.Fatalf("no total in %v", reply)
+		panic(fmt.Sprintf("no total in %v", reply))
 	}
 	return fmt.Sprintf("%s: %v", item, total)
 }
