@@ -1,3 +1,4 @@
+import re
 import sys
 from dataclasses import dataclass, replace
 
@@ -33,10 +34,9 @@ def apply_line(summary: Summary, line: str) -> Summary:
     account = parts[0]
     if not valid_account(account):
         raise LineError("bad account")
-    try:
-        amount = int(parts[1])
-    except ValueError:
-        raise LineError("bad amount") from None
+    if re.fullmatch(r"[+-]?[0-9]+", parts[1]) is None:
+        raise LineError("bad amount")
+    amount = int(parts[1])
     if amount > 1000000 or amount < -1000000:
         raise LineError("amount out of range")
     current = summary.balances.get(account, 0)

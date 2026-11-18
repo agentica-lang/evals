@@ -323,6 +323,15 @@ What is not equal to the other arms:
   before the Go arm had it `noexec`.
 - The image is `linux/amd64` only (the Go archive is), and the Dockerfile needs
   BuildKit (`ADD --checksum`).
+- A crash exits 1 in Python and Agentica and 2 in Go (a `panic`). No rule
+  depends on it: a case passes only with exit 0 and the expected output, the
+  t17 and t19 drivers expect `--- exit 0` in every case, and the failure class
+  comes from stderr.
+- Known gaps, not fixed: for a non-ASCII name the t19 Python reference writes
+  `\u` escapes (`ensure_ascii`) where Go writes UTF-8, and no hidden case has
+  one; the t18 driver never sends some of the cases the task describes, so a
+  Go (or any) server can get them wrong and still pass. t16 states that
+  salaries and totals fit in 64 bits, as Agentica's `Int` and Go's `int` do.
 
 ### Spend and fix rounds
 

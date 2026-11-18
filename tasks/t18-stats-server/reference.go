@@ -127,7 +127,10 @@ func handle(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		double := new(big.Int).Mul(n, big.NewInt(2))
-		sendJSON(w, 200, map[string]rawJSON{"n": rawJSON(n.String()), "double": rawJSON(double.String())}, "")
+		sendJSON(w, 200, struct {
+			N      rawJSON `json:"n"`
+			Double rawJSON `json:"double"`
+		}{rawJSON(n.String()), rawJSON(double.String())}, "")
 	}
 }
 

@@ -1,3 +1,4 @@
+import re
 import sys
 from dataclasses import dataclass, replace
 
@@ -31,10 +32,8 @@ def bad_command() -> None:
 
 
 def parse_int(text: str) -> int | None:
-    try:
-        return int(text)
-    except ValueError:
-        return None
+    # Digits with an optional sign only: int() would also take "1_0" and spaces.
+    return int(text) if re.fullmatch(r"[+-]?[0-9]+", text) else None
 
 
 def valid_id(text: str, prefix: str) -> bool:

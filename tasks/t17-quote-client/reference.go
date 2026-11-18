@@ -74,7 +74,8 @@ func quote(base, item string, quantity int) string {
 		if !ok || !named || !isInt(reply["unit_cents"]) || !isInt(reply["total_cents"]) {
 			return "error: bad response"
 		}
-		return fmt.Sprintf("%s: %s", item, reply["total_cents"])
+		total, _ := reply["total_cents"].(json.Number).Int64()
+		return fmt.Sprintf("%s: %d", item, total)
 	case http.StatusBadRequest, http.StatusNotFound:
 		return failureText(text)
 	}

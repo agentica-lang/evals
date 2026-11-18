@@ -1,4 +1,5 @@
 import json
+import re
 import sys
 from dataclasses import dataclass
 
@@ -24,11 +25,10 @@ def parse_row(line: str) -> Row | None:
         return None
     if fields[0] == "" or fields[1] == "" or fields[2] == "":
         return None
-    try:
-        quantity = int(fields[3])
-        cents = int(fields[4])
-    except ValueError:
+    if not all(re.fullmatch(r"[+-]?[0-9]+", text) for text in fields[3:]):
         return None
+    quantity = int(fields[3])
+    cents = int(fields[4])
     if quantity < 1 or cents < 0:
         return None
     return Row(customer=fields[1], quantity=quantity, cents=cents)

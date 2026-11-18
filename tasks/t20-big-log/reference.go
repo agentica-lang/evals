@@ -39,7 +39,7 @@ func main() {
 	out := bufio.NewWriter(os.Stdout)
 	defer out.Flush()
 	for scanner.Scan() {
-		parts := strings.Split(strings.TrimSuffix(scanner.Text(), "\r"), " ")
+		parts := strings.Split(scanner.Text(), " ")
 		if len(parts) != 6 || !digits(parts[0]) || !digits(parts[4]) || !digits(parts[5]) {
 			continue
 		}
