@@ -319,10 +319,10 @@ class FanoutFaultTests(unittest.TestCase):
         "a timeout on the head alone": ("client.py", "            status, headers = parse_head(head)\n",
                                         "            limit.reschedule(None)\n            status, headers = parse_head(head)\n",
                                         ["03"]),
-        "a redirect followed": ("fetch.py", "        answer = await attempt(url, job, (ends_at - time.monotonic()) * 1000)\n",
-                                "        answer = await attempt(url, job, (ends_at - time.monotonic()) * 1000)\n"
+        "a redirect followed": ("fetch.py", "        answer = await attempt(url, job)\n",
+                                "        answer = await attempt(url, job)\n"
                                 "        if answer is not None and 300 <= answer[0] <= 399:\n"
-                                "            answer = await attempt(url.rsplit('/', 1)[0] + '/redirected', job, 1000)\n",
+                                "            answer = await attempt(url.rsplit('/', 1)[0] + '/redirected', job)\n",
                                 ["adv-05"]),
         "no 64-bit bound": ("fetch.py", "or not -LIMIT <= value < LIMIT", "", ["adv-05"]),
     }

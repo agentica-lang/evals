@@ -147,7 +147,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             body = b"" if int(rest) == 204 else b'{"error":"status"}'
         elif kind == "body":
             body = rest.encode()
-        headers = ["Content-Type: application/json", f"Content-Length: {len(body)}", "Connection: close"]
+        headers = ["Content-Type: application/json", "Connection: close"]
+        if final_status(step) != 204:
+            headers.insert(1, f"Content-Length: {len(body)}")
         if 300 <= final_status(step) < 400:
             headers.append("Location: /redirected")
         head = ("\r\n".join(headers) + "\r\n\r\n").encode()

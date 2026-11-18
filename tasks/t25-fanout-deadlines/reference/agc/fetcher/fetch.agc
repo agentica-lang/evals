@@ -70,8 +70,7 @@ end
 # request is cancelled, which closes its connection.
 def attempt(url: String, job: Job, ends_at: Int) -> Outcome
   inbox: Channel[Outcome] = Channel.new(2)
-  timeout = [job.request_timeout_ms, ends_at - Time.monotonic_ms()].min.unwrap_or(1).clamp(1, job.request_timeout_ms)
-  tasks = [Task.spawn(&send_request, Request(url: url, timeout_ms: timeout, inbox: inbox))]
+  tasks = [Task.spawn(&send_request, Request(url: url, timeout_ms: job.request_timeout_ms, inbox: inbox))]
   hedge_at = Time.monotonic_ms() + job.hedge_ms
   running = 1
   hedge_pending = job.hedge_ms > 0
@@ -96,8 +95,7 @@ def attempt(url: String, job: Job, ends_at: Int) -> Outcome
       error(_) ->
         if hedge_pending and Time.monotonic_ms() < ends_at
           hedge_pending = false
-          rest = [job.request_timeout_ms, ends_at - Time.monotonic_ms()].min.unwrap_or(1).clamp(1, job.request_timeout_ms)
-          tasks = tasks.push(Task.spawn(&send_request, Request(url: url, timeout_ms: rest, inbox: inbox)))
+          tasks = tasks.push(Task.spawn(&send_request, Request(url: url, timeout_ms: job.request_timeout_ms, inbox: inbox)))
           running = running + 1
         else
           running = 0
