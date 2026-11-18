@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"maps"
 	"os"
+	"slices"
 	"strconv"
 )
 
@@ -16,20 +17,26 @@ func scale() int {
 	return 1
 }
 
-// orderedSet keeps the first-insertion order that Agentica's Set promises. A removed key stays in keys and is
-// skipped, as a Python dict's pop costs no shift either.
+// orderedSet keeps the first-insertion order that Agentica's Set promises: a removed key stays in keys and is
+// skipped, as a Python dict's pop costs no shift either; a key added again after its removal goes to the end.
 type orderedSet struct {
 	member map[int]bool
+	listed map[int]bool
 	keys   []int
 }
 
-func newSet() *orderedSet { return &orderedSet{member: map[int]bool{}} }
+func newSet() *orderedSet { return &orderedSet{member: map[int]bool{}, listed: map[int]bool{}} }
 
 func (s *orderedSet) add(key int) {
-	if !s.member[key] {
-		s.member[key] = true
-		s.keys = append(s.keys, key)
+	if s.member[key] {
+		return
 	}
+	if s.listed[key] {
+		s.keys = slices.DeleteFunc(s.keys, func(k int) bool { return k == key })
+	}
+	s.member[key] = true
+	s.listed[key] = true
+	s.keys = append(s.keys, key)
 }
 
 func (s *orderedSet) has(key int) bool { return s.member[key] }

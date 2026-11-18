@@ -1,7 +1,7 @@
 # The benchmark twins (bench/): the Agentica programs of the pinned commit against Python and Go, in the
 # evaluation image. RUNS and SIZE pass on to bench/run.py.
 RUNS ?= 5
-SIZE ?= 1
+SIZE ?= 5
 
 .PHONY: bench bench-check image
 
