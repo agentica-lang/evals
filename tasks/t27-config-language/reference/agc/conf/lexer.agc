@@ -70,6 +70,7 @@ def tokenize(source: String) -> Result[List[Token]]
     elsif c == "#"
       while i < size and chars[i] != "\n"
         i += 1
+        col += 1
       end
     elsif name_start?(c)
       j = i
