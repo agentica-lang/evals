@@ -12,6 +12,7 @@ diagnostics.py      counts the diagnostics the agents saw
 test_*.py           unit tests of the runner (unittest)
 Dockerfile          the evaluation image (Pi, mypy, pinned)
 tasks/              one folder per task: task.md, reference.*, start.*, hidden/
+ecosystem/          the pinned packages of the ecosystem tasks
 .cache/             the pinned Agentica release and sources (not versioned)
 .secrets/           provider auth files (never committed)
 results/            run output (never committed)

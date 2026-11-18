@@ -34,6 +34,11 @@ SOURCE_PATHS = [".agents/skills/agentica-programming", "docs/grammar", "site/con
 # The Agentica sources and the runtime folder (bin/agentica) copied into each agentica workspace.
 ROOT = CACHE / f"agentica-{AGENTICA_COMMIT[:12]}"
 RUNTIME = CACHE / "runtime"
+# The packages of the ecosystem tasks: agentica.toml and agentica.lock (Bond, agentica-db), go.mod and go.sum
+# (modernc.org/sqlite, which the image carries). The online docs follow the latest releases, which the lock pins.
+ECOSYSTEM = EVAL / "ecosystem"
+ECOSYSTEM_DOCS = ("https://www.agentica-lang.com/llms.txt, https://www.agentica-lang.com/bond/llms.txt and "
+                  "https://www.agentica-lang.com/agentica-db/llms.txt")
 ARMS = {"skill": "agc", "grammar": "agc", "binary": "agc", "python": "py", "typed-python": "py", "skill-nocli": "agc",
         "go": "go"}
 TYPED_ARMS = {"typed-python"}
@@ -245,11 +250,61 @@ def clone_rootfs(template: Path, destination: Path) -> Path:
 GO_LANGUAGE: str | None = None
 
 
-def go_mod() -> str:
-    """The go.mod of a workspace: module `solution`, at the Go version of the image."""
+def go_mod(ecosystem: bool = False) -> str:
+    """The go.mod of a workspace: module `solution`, at the Go version of the image; an ecosystem task also requires
+    the modules of ecosystem/go.mod."""
     if GO_LANGUAGE is None:
         raise SystemExit("the go arm needs the image's Go version: validate the image first")
+    if ecosystem:
+        return re.sub(r"(?m)^go \S+$", f"go {GO_LANGUAGE}", (ECOSYSTEM / "go.mod").read_text(encoding="utf-8"))
     return f"module solution\n\ngo {GO_LANGUAGE}\n"
+
+
+def ecosystem_task(task: str) -> bool:
+    """A task built on packages: Bond and agentica-db in Agentica, modernc.org/sqlite in Go (its start imports a
+    package)."""
+    start = TASKS / task / "start.agc"
+    return start.is_file() and 'from "pkg/' in start.read_text(encoding="utf-8")
+
+
+# The installed packages of ecosystem/agentica.lock, set by ecosystem_deps.
+ECOSYSTEM_DEPS: Path | None = None
+
+
+def ecosystem_deps() -> Path:
+    """The `deps/` of ecosystem/agentica.lock, installed once under .cache by the Agentica under test; the lock pins
+    each package's commit and hash."""
+    global ECOSYSTEM_DEPS
+    lock = ECOSYSTEM / "agentica.lock"
+    project = CACHE / f"ecosystem-{sha256_of(lock)[:12]}"
+    if not (project / "deps").is_dir():
+        shutil.rmtree(project, ignore_errors=True)
+        project.mkdir(parents=True)
+        for name in ("agentica.toml", "agentica.lock"):
+            shutil.copyfile(ECOSYSTEM / name, project / name)
+        done = subprocess.run([str(RUNTIME / "bin" / "agentica"), "install"], cwd=project, capture_output=True,
+                              text=True)
+        if done.returncode != 0:
+            shutil.rmtree(project, ignore_errors=True)
+            raise SystemExit(f"installing the ecosystem packages failed: {done.stderr.strip()[-500:]}")
+    ECOSYSTEM_DEPS = project / "deps"
+    return ECOSYSTEM_DEPS
+
+
+def project_files(work: Path, task: str, ext: str) -> None:
+    """What a workspace needs besides the program: go.mod (and go.sum) for Go; for an ecosystem task in Agentica, the
+    package manifest, its lock and the installed packages."""
+    ecosystem = ecosystem_task(task)
+    if ext == "go":
+        (work / "go.mod").write_text(go_mod(ecosystem), encoding="utf-8")
+        if ecosystem:
+            shutil.copyfile(ECOSYSTEM / "go.sum", work / "go.sum")
+    if ext == "agc" and ecosystem:
+        if ECOSYSTEM_DEPS is None:
+            raise SystemExit("the ecosystem packages are not installed: run ecosystem_deps first")
+        for name in ("agentica.toml", "agentica.lock"):
+            shutil.copyfile(ECOSYSTEM / name, work / name)
+        shutil.copytree(ECOSYSTEM_DEPS, work / "deps")
 
 
 def start_file(task: str, arm: str) -> Path:
@@ -274,8 +329,7 @@ def prepare(work: Path, task: str, arm: str) -> None:
         shutil.copy(start, work / f"start.{ext}")
     if ext == "agc":
         shutil.copytree(RUNTIME, work, dirs_exist_ok=True)
-    if ext == "go":
-        (work / "go.mod").write_text(go_mod(), encoding="utf-8")
+    project_files(work, task, ext)
     if arm in SKILL_ARMS:
         (work / "skills").mkdir()
         shutil.copytree(skill_dir(), work / "skills" / "agentica-programming")
@@ -379,12 +433,16 @@ def prompt(work: Path, arm: str) -> str:
         else:
             lines.append("The language is described in docs/grammar.md, the builtin library in docs/library/, "
                          "and example programs are in examples/. Use `agentica help NAME` for builtin signatures.")
+        if (work / "agentica.lock").exists():
+            lines.append(f"The packages in deps/ are documented online: {ECOSYSTEM_DOCS}.")
     elif arm in TYPED_ARMS:
         lines.append("Write a complete Python 3 program to solution.py, with type annotations on every function. "
                      "Run programs with `python3`. The type checker is `mypy --strict solution.py`, on your PATH: "
                      "the solution must pass it, so do not silence it with `# type: ignore` or by weakening its options.")
     elif ext == "go":
-        lines.append("Write a complete Go program to solution.go, in package main, with the standard library only; "
+        modules = ("the standard library and modernc.org/sqlite (a database/sql driver named \"sqlite\"), which "
+                   "go.mod and go.sum already require" if (work / "go.sum").exists() else "the standard library only")
+        lines.append(f"Write a complete Go program to solution.go, in package main, with {modules}; "
                      "go.mod is ready. Run programs with `go run solution.go`. The checkers are "
                      "`go vet solution.go` and `go build solution.go`, on your PATH: the solution must pass both, "
                      "so do not silence them. Where the task names `sys.argv` or Python's HTTP modules, use "
@@ -1146,8 +1204,7 @@ def grade(solution: Path, task: str, arm: str, args: argparse.Namespace, scratch
     shutil.copyfile(solution, work / solution.name)
     if ext == "agc":
         shutil.copytree(RUNTIME, work, dirs_exist_ok=True)
-    if ext == "go":
-        (work / "go.mod").write_text(go_mod(), encoding="utf-8")
+    project_files(work, task, ext)
 
     def contained(command: list[str], stdin: str, timeout: int) -> tuple[str | None, str, int | None]:
         return contained_run(args, grade_root, work, command, stdin, timeout)
@@ -1654,6 +1711,8 @@ def main() -> int:
     if agentica:
         use_sources(args.agentica_src)
         install_runtime(args.agentica)
+        if any(ecosystem_task(task) for task in args.tasks):
+            ecosystem_deps()
     image_info: dict[str, str | None] = {"checker": None, "go": None, "image_id": None, "pi": None}
     if args.sandbox == "docker":
         image_info = validate_docker(args.image, typed, agentica, args.agent == "pi", "go" in args.arms)

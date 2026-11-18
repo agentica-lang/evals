@@ -343,6 +343,55 @@ class PrepareTests(unittest.TestCase):
                 run.main()
         self.assertIn("nothing to run", str(raised.exception))
 
+    def test_an_ecosystem_task_brings_its_packages_to_each_arm(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            task = root / "tasks" / "shop"
+            task.mkdir(parents=True)
+            (task / "task.md").write_text("Shop.\n", encoding="utf-8")
+            (task / "start.agc").write_text('import Bond from "pkg/bond/bond"\n', encoding="utf-8")
+            deps = root / "deps"
+            (deps / "bond").mkdir(parents=True)
+            (deps / "bond" / "bond.agc").write_text("# bond\n", encoding="utf-8")
+            runtime = root / "runtime"
+            (runtime / "bin").mkdir(parents=True)
+            with (patch.object(run, "TASKS", root / "tasks"), patch.object(run, "RUNTIME", runtime),
+                  patch.object(run, "ECOSYSTEM_DEPS", deps), patch.object(run, "GO_LANGUAGE", "1.27")):
+                for arm in ("binary", "go", "python"):
+                    run.prepare(root / arm, "shop", arm)
+                prompts = {arm: run.prompt(root / arm, arm) for arm in ("binary", "go", "python")}
+            files = {arm: sorted(path.name for path in (root / arm).iterdir()) for arm in ("binary", "go", "python")}
+            go_mod = (root / "go" / "go.mod").read_text(encoding="utf-8")
+            installed = (root / "binary" / "deps" / "bond" / "bond.agc").is_file()
+
+        self.assertEqual(files, {"binary": ["agentica.lock", "agentica.toml", "bin", "deps", "start.agc", "task.md"],
+                                 "go": ["go.mod", "go.sum", "task.md"], "python": ["task.md"]})
+        self.assertTrue(installed)
+        self.assertIn("go 1.27\n", go_mod)
+        self.assertIn("require modernc.org/sqlite v", go_mod)
+        self.assertIn("agentica-lang.com/bond/llms.txt", prompts["binary"])
+        self.assertIn("modernc.org/sqlite", prompts["go"])
+        self.assertNotIn("llms.txt", prompts["python"] + prompts["go"])
+
+    def test_the_ecosystem_packages_are_installed_once_from_the_lock(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            agentica = root / "runtime" / "bin" / "agentica"
+            agentica.parent.mkdir(parents=True)
+            agentica.write_text("#!/bin/sh\n[ -f agentica.lock ] && mkdir -p deps/bond && echo run >> ../installs\n",
+                                encoding="utf-8")
+            agentica.chmod(0o755)
+            cache = root / "cache"
+            with (patch.object(run, "CACHE", cache), patch.object(run, "RUNTIME", root / "runtime"),
+                  patch.object(run, "ECOSYSTEM_DEPS", None)):
+                first = run.ecosystem_deps()
+                second = run.ecosystem_deps()
+            installs = (cache / "installs").read_text(encoding="utf-8")
+
+        self.assertEqual(first, second)
+        self.assertEqual(first.parent.name, f"ecosystem-{run.sha256_of(run.ECOSYSTEM / 'agentica.lock')[:12]}")
+        self.assertEqual(installs, "run\n")
+
     def test_the_tasks_available_in_go(self) -> None:
         # Each part of the Go arm adds its tasks here.
         available = sorted((task.name for task in run.TASKS.iterdir() if (task / "reference.go").is_file()),
@@ -352,7 +401,8 @@ class PrepareTests(unittest.TestCase):
                                      "t9-inventory-orders", "t10-calc-extend", "t11-gradebook",
                                      "t12-member-ids", "t13-transfer-variant", "t14-price-lookup",
                                      "t15-robust-ledger", "t16-robust-csv", "t17-quote-client",
-                                     "t18-stats-server", "t19-orders-report", "t20-big-log"])
+                                     "t18-stats-server", "t19-orders-report", "t20-big-log",
+                                     "t21-notes-api"])
 
     def test_a_go_note_is_added_to_the_task_of_the_go_arm_only(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1569,6 +1619,25 @@ class DockerGradingTests(unittest.TestCase):
                           ("pass", 1, None, None), ("fail", 0, "check", "vet")])
         # go vet stops at the first type error of the t2 start; the build lists all six.
         self.assertEqual(results[-1]["check_errors"], 6)
+
+    def test_an_ecosystem_task_builds_with_the_baked_sqlite_module_offline_and_nothing_else(self) -> None:
+        if run.go_probe(run.DEFAULT_IMAGE)[0] != 0:
+            self.skipTest("evaluation image has no Go")
+        run.ensure_go(run.DEFAULT_IMAGE)
+        sqlite = ('package main\n\nimport (\n\t"database/sql"\n\t"fmt"\n\n\t_ "modernc.org/sqlite"\n)\n\n'
+                  'func main() {\n\tdb, _ := sql.Open("sqlite", ":memory:")\n\tvar n int\n'
+                  '\tif err := db.QueryRow("select 3 * 2").Scan(&n); err != nil {\n\t\tpanic(err)\n\t}\n'
+                  '\tfmt.Println(n)\n}\n')
+        missing = 'package main\n\nimport "golang.org/x/text/language"\n\nfunc main() { println(language.English.String()) }\n'
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.sample_task(root)
+            (root / "tasks" / "sample" / "start.agc").write_text('import Db from "pkg/db/db"\n', encoding="utf-8")
+            results = [self.grade(root, name, source, arm="go")
+                       for name, source in (("go-sqlite", sqlite), ("go-missing", missing))]
+
+        self.assertEqual([(r["status"], r["failure"], r["code"]) for r in results],
+                         [("pass", None, None), ("fail", "check", "vet")])
 
     def test_typed_arm_passes_a_checked_solution_and_counts_type_ignores(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

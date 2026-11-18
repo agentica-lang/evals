@@ -38,7 +38,18 @@ RUN ln -s /usr/local/go/bin/go /usr/local/go/bin/gofmt /usr/local/bin/ \
            | sed 's/.*/\t_ "&"/'; \
          printf ')\n\nfunc main() {}\n'; } > main.go \
     && go vet . && go build -o /dev/null . \
-    && chmod -R a+rX /opt/go-cache && rm -rf /opt/go-warm /tmp/go
+    && rm -rf /opt/go-warm /tmp/go
+
+# The one module outside the standard library, for the ecosystem tasks: modernc.org/sqlite (pure Go), pinned by
+# ecosystem/go.sum. The build downloads it into a read-only module cache and warms the build cache for it; at run time
+# GOPROXY stays off.
+ENV GOMODCACHE=/opt/go-mod
+COPY ecosystem/go.mod ecosystem/go.sum /opt/go-warm/
+RUN cd /opt/go-warm \
+    && printf 'package main\n\nimport (\n\t"database/sql"\n\n\t_ "modernc.org/sqlite"\n)\n\nfunc main() { sql.Drivers() }\n' > main.go \
+    && GOPROXY=https://proxy.golang.org GOFLAGS=-mod=readonly go build -o /dev/null . && go vet . \
+    && rm -rf /opt/go-warm /tmp/go /opt/go-mod/cache/download/*/*/@v/*.zip /opt/go-mod/cache/download/*/*/*/@v/*.zip \
+    && chmod -R a+rX /opt/go-cache /opt/go-mod
 
 ENV HOME=/home/agent
 ENV PATH=/workspace/bin:/usr/local/bin:/usr/bin:/bin
