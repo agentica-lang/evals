@@ -574,8 +574,9 @@ workspace. These are left out, and the prompt says so:
 - the reserved folders the harness fills (`bin/`, `skills/`, `deps/`,
   `docs/`, `examples/`), hidden files and folders, and links (also files
   under a linked folder);
-- the agent's own tests: `test_*.py`, `*_test.py`, `*_test.go`,
-  `*_test.agc`, and anything under a `tests/` folder;
+- the agent's own tests: `test_*.py`, `test.py`, `tests.py`,
+  `conftest.py`, `*_test.py`, `*_test.go`, `*_test.agc`, and anything under
+  a `test/`, `tests/` or `specs/` folder;
 - any other file (data, `.pyi`, `go:embed`).
 
 More than 200 files, or a file over 1 MiB, fails the run with failure `size`
@@ -615,8 +616,10 @@ and `--check-references` prints them for a reference that fails. A run whose cas
 `crash_cases` counts the failed cases that crashed rather than gave a wrong
 answer: the stderr shows a crash (a traceback, `panic:`, `fatal error:` or
 `error[RUNTIME-`), and the program exited non-zero. Under a driver the exit
-status is the driver's and the stderr is the program's, which the driver
-passes on, so the crash marker alone counts.
+status is the driver's: a driver passes on the program's stderr and adds a
+line `PROGRAM-EXIT CODE` when the program ended on its own (not when the
+driver stopped it), and a crash needs such a line with a code other than 0.
+Every driver does this.
 
 `spec_runs` counts runs of the agent's own tests: `agentica test`,
 `python3 -m unittest`, `pytest` (alone or with `-m`), `go test`, and a test

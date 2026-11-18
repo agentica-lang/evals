@@ -79,6 +79,7 @@ def main():
         size = os.path.getsize(path)
         done = subprocess.run(sys.argv[2:] + [path], cwd=directory, capture_output=True, text=True, timeout=50)
     sys.stderr.write(done.stderr)
+    sys.stderr.write(f"PROGRAM-EXIT {done.returncode}\n")
     actual = done.stdout.split("\n")
     if actual and actual[-1] == "":
         actual.pop()
