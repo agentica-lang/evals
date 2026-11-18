@@ -52,6 +52,13 @@ lines), mostly from explicit error returns.
 | `t19-orders-report` | repair an integration | a CSV to JSON pipeline with the wrong delimiter, header and path |
 | `t20-big-log` | streaming probe | slow errors of a log up to 29 MB; a whole-file read stops at 1 MiB, so stream (`File.each_line`, `File.read_line`) |
 
+The ecosystem tasks from t21 on build with packages, not the standard library
+alone (see "The ecosystem tasks").
+
+| Task | Kind | The agent does |
+|---|---|---|
+| `t21-notes-api` | build on packages | a JSON API for notes on SQLite, from a start that answers `/health` only |
+
 The arms are the context an agent gets:
 
 - `python`: the same task in Python (untyped). The baseline of the first rounds.
@@ -332,6 +339,51 @@ What is not equal to the other arms:
   one; the t18 driver never sends some of the cases the task describes, so a
   Go (or any) server can get them wrong and still pass. t16 states that
   salaries and totals fit in 64 bits, as Agentica's `Int` and Go's `int` do.
+
+### The ecosystem tasks
+
+A task whose `start.agc` imports a package (`pkg/...`) is an ecosystem task.
+Each arm builds it with the libraries a developer would take:
+
+- Agentica: Bond and agentica-db. `ecosystem/agentica.toml` and
+  `ecosystem/agentica.lock` pin their releases (and the `pool` package that
+  agentica-db needs) by tag, commit and hash. The runner installs them once
+  with the Agentica under test (`agentica install`) into `.cache/` and copies
+  the manifest, the lock and `deps/` into the workspace, so neither the agent
+  nor the grader fetches anything (`agentica install` runs on every round and
+  checks what is there, so a partial `deps/` is never used). The docs are the
+  ones of the pinned releases only: the prompt names Bond's versioned
+  `https://www.agentica-lang.com/bond/0.15.1/llms.txt`, and agentica-db's site
+  pages at the locked commit (it has no versioned `llms.txt`) are fetched with
+  the packages and copied into the workspace as `docs/agentica-db/`. Not the
+  site's root `llms.txt`: it links a Bond and agentica-db todo-API tutorial,
+  which is nearly t21 and t23.
+- Python: the standard library, `http.server` and `sqlite3`, as
+  agentica-lang/agentica#1843 allows; the image has no pip packages for it,
+  and the prompt names no docs.
+- Go: `net/http` and `database/sql` with `modernc.org/sqlite` (pure Go, no
+  cgo), pinned in `ecosystem/go.mod` and `ecosystem/go.sum`. The image
+  downloads it at build time into a read-only module cache
+  (`GOMODCACHE=/opt/go-mod`, about 260 MB) and warms the build cache for it,
+  so a check takes about a second. At run time `GOPROXY` stays off: another
+  module does not build. The workspace gets that `go.mod` and `go.sum`, and the
+  prompt names the module (no docs: the Go arm knows the standard library and
+  `database/sql`).
+
+The agent container has network, as for every task, so the agent can read the
+docs; the 20 offline tasks do not need it, and the grading stays offline. An
+Agentica arm that reads Bond's docs with `curl` counts in `net_commands` on
+these tasks. The
+hidden driver starts the service on a fresh database file, sends the requests,
+runs SQL on the file from outside (so a service that keeps the notes in memory
+fails), reads the table, and restarts the service on the same file. Its SQL
+does not wait for a lock (`timeout=0`): the task says a change is committed
+before its answer, so a service that answers first and commits after fails a
+case. A case may take 30 seconds (`hidden/timeout`), as a restart starts the
+service again. A `405`
+shows the status alone, because Bond answers it in plain text by itself. The
+agentica-db native SQLite driver needs a C compiler, which the image does not
+have, so Agentica runs its FFI driver, with a warning on stderr.
 
 ### Spend and fix rounds
 

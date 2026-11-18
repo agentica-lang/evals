@@ -1,0 +1,5 @@
+name = "solution"
+
+[dependencies]
+bond = { git = "https://github.com/agentica-lang/bond", tag = "0.15.1" }
+db = { git = "https://github.com/agentica-lang/agentica-db", tag = "0.13.0" }

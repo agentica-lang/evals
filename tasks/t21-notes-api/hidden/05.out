@@ -1,0 +1,10 @@
+GET /nope -> 404 application/json {"error":"not found"}
+DELETE /nope/1 -> 404 application/json {"error":"not found"}
+POST /health -> 405
+PUT /notes -> 405
+PUT /notes/1 -> 405
+GET /notes/1/extra -> 404 application/json {"error":"not found"}
+POST /notes -> 201 application/json {"body":"line\nbreak \"quoted\"","id":1,"title":"\u00fcn\u00efcode \u2713"}
+GET /notes/1 -> 200 application/json {"body":"line\nbreak \"quoted\"","id":1,"title":"\u00fcn\u00efcode \u2713"}
+GET /health -> 200 application/json {"status":"ok"}
+table: [[1,"\u00fcn\u00efcode \u2713","line\nbreak \"quoted\""]]

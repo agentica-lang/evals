@@ -1,2 +1,4 @@
 *
 !Dockerfile
+!ecosystem/go.mod
+!ecosystem/go.sum
