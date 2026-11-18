@@ -943,8 +943,52 @@ class TreeTaskTests(unittest.TestCase):
                 (work / name).write_text("", encoding="utf-8")
             (work / "linked.py").symlink_to(work / "solution.py")
             (work / "linked-dir").symlink_to(work / "lib")
-            self.assertEqual(run.solution_files(work, "py"),
-                             [Path("lib/money.py"), Path("solution.py"), Path("tests/test_money.py")])
+            self.assertEqual(run.solution_files(work, "py"), [Path("solution.py"), Path("lib/money.py")])
+
+    def test_a_tree_too_big_or_unreadable_fails_before_any_case_runs(self) -> None:
+        args = Namespace(sandbox="docker", image=run.DEFAULT_IMAGE, chroot_root=None)
+        with tempfile.TemporaryDirectory() as directory, patch.object(run, "TASKS", Path(directory) / "tasks"):
+            root = Path(directory)
+            (root / "tasks" / "tree" / "reference").mkdir(parents=True)
+            (root / "tasks" / "tree" / "hidden").mkdir()
+            (root / "tasks" / "tree" / "hidden" / "01.in").write_text("", encoding="utf-8")
+            outcomes = {}
+            for name, files in (("many", {f"lib/m{i:03}.py": "" for i in range(run.TREE_LIMIT)}),
+                                ("large", {"lib/big.py": "#" * (run.TREE_FILE_LIMIT + 1)}),
+                                ("unreadable", {"lib/secret.py": ""})):
+                work = root / name
+                for relative, text in {"solution.py": "", **files}.items():
+                    (work / relative).parent.mkdir(parents=True, exist_ok=True)
+                    (work / relative).write_text(text, encoding="utf-8")
+                if name == "unreadable":
+                    (work / "lib" / "secret.py").chmod(0)
+                scratch = root / f"{name}-scratch"
+                scratch.mkdir()
+                with patch.object(run, "contained_run", side_effect=AssertionError("no case may run")):
+                    row = run.grade(work / "solution.py", "tree", "python", args, scratch, name)
+                outcomes[name] = (row["status"], row["failure"], row["code"], row["total"])
+            (root / "unreadable" / "lib" / "secret.py").chmod(0o600)
+        self.assertEqual(outcomes, {"many": ("fail", "size", "too-many-files", 1),
+                                    "large": ("fail", "size", "too-large", 1),
+                                    "unreadable": ("fail", "copy", None, 1)})
+
+    def test_a_tree_runs_python_with_its_folder_on_the_path_and_go_from_a_hidden_binary(self) -> None:
+        self.assertEqual(run.case_invocation("py", None, "x", tree=True), (["python3", "-s", "-E", "solution.py"], "x"))
+        self.assertEqual(run.case_invocation("py", "d", "x", tree=True),
+                         (["python3", "-I", "-", "x", "python3", "-s", "-E", "/workspace/solution.py"], "d"))
+        self.assertEqual(run.case_invocation("go", None, "x", tree=True), (["/workspace/.solution-bin"], "x"))
+
+    def test_a_crash_is_a_crash_marker_and_a_non_zero_exit_or_a_driver(self) -> None:
+        self.assertEqual([run.crashed("runtime", 1, False), run.crashed("runtime", 0, False),
+                          run.crashed("runtime", 0, True), run.crashed("logic", 1, False),
+                          run.crashed("runtime", None, False)], [True, False, True, False, False])
+
+    def test_a_missing_start_tree_stops_with_its_name(self) -> None:
+        with tempfile.TemporaryDirectory() as directory, patch.object(run, "TASKS", Path(directory) / "tasks"):
+            (Path(directory) / "tasks" / "tree" / "reference").mkdir(parents=True)
+            (Path(directory) / "tasks" / "tree" / "start" / "go").mkdir(parents=True)
+            with self.assertRaisesRegex(SystemExit, r"tree: no start tree for typed-python \(start/py/\)"):
+                run.start_outcome(Namespace(), Path(directory), "tree", "typed-python")
 
     def test_a_task_agent_timeout_only_raises_the_rounds_timeout(self) -> None:
         with tempfile.TemporaryDirectory() as directory, patch.object(run, "TASKS", Path(directory)):
@@ -956,12 +1000,19 @@ class TreeTaskTests(unittest.TestCase):
 
     def test_spec_runs_and_edits_of_any_source_file_count_in_a_tree_task(self) -> None:
         calls = [run.Call("bash", {"command": "cd /workspace && agentica test tests/"}, "error[CHECK-TYPE-MISMATCH]"),
+                 run.Call("edit", {"path": "tests/money_test.agc"}),
                  run.Call("edit", {"path": "lib/money.agc"}),
                  run.Call("bash", {"command": "python3 -m unittest discover"}, "OK"),
                  run.Call("bash", {"command": "go test ./..."}, "ok"),
                  run.Call("bash", {"command": "agentica solution.agc"}, "ok")]
-        self.assertEqual(run.call_metrics(calls, tree=True)["spec_runs"], 3)
-        self.assertEqual(run.call_metrics(calls, tree=True)["fix_rounds"], 1)
+        more = [run.Call("bash", {"command": "pytest -q"}), run.Call("bash", {"command": "python3 tests/test_money.py"}),
+                run.Call("bash", {"command": "agentica tests/money_test.agc"})]
+        self.assertEqual(run.call_metrics(calls + more, tree=True)["spec_runs"], 6)
+        # An edit of a test file is no fix; a shell write of a source file is, in a tree task only.
+        self.assertEqual(run.call_metrics(calls[:2], tree=True)["fix_rounds"], 0)
+        shell = [calls[0], run.Call("bash", {"command": "cat > lib/money.agc <<'EOF'\nx\nEOF"})]
+        self.assertEqual((run.call_metrics(shell, tree=True)["fix_rounds"], run.call_metrics(shell)["fix_rounds"]), (1, 0))
+        self.assertEqual(run.call_metrics(calls, tree=True)["fix_rounds"], 1)  # lib/money.agc
         self.assertEqual(run.call_metrics(calls)["fix_rounds"], 0)
 
     def test_the_quality_table_sums_the_new_fields_and_shows_old_rows_as_unknown(self) -> None:
@@ -1004,7 +1055,7 @@ class TreeRunTests(unittest.TestCase):
             kept = sorted(str(path.relative_to(results / "tree-python-1")) for path in
                           (results / "tree-python-1" / "solution").rglob("*.py"))
 
-        self.assertEqual(graded, [[Path("lib/extra.py"), Path("lib/money.py"), Path("solution.py")]])
+        self.assertEqual(graded, [[Path("solution.py"), Path("lib/extra.py"), Path("lib/money.py")]])
         self.assertEqual(kept, ["solution/lib/extra.py", "solution/lib/money.py", "solution/solution.py"])
         self.assertEqual((row["status"], row["regressions"], row["crash_cases"]), ("pass", 0, 0))
 
@@ -1148,7 +1199,7 @@ class CaseCommandTests(unittest.TestCase):
                                  else task / f"reference.{ext}")
                     self.assertTrue(reference.is_file(), reference)
                 cases = sorted((task / "hidden").glob("*.in"))
-                self.assertTrue(cases)
+                self.assertTrue([case for case in cases if run.case_tier(case) != run.ADVERSARIAL])
                 for case in cases:
                     self.assertTrue(case.with_suffix(".out").is_file(), case.name)
 
@@ -1580,6 +1631,17 @@ class SummaryTests(unittest.TestCase):
                       summary)
         self.assertIn("stopped_for_budget: false", summary)
 
+    def test_a_task_with_no_main_cases_counts_its_runs_as_whole(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            results = Path(directory)
+            row = {"task": "t", "arm": "python", "status": "pass", "passed": 0, "total": 0, "seconds": 1.0,
+                   "failing_runs": 0, "check_runs": 0, "query_runs": 0, "refused_queries": 0, "read_runs": 0,
+                   "failure": None, "code": None}
+            (results / "results.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
+            with contextlib.redirect_stdout(io.StringIO()):
+                run.summarize(results)
+            self.assertIn("| t | python | 1 | 1/1 | 100% |", (results / "summary.md").read_text(encoding="utf-8"))
+
     def test_summary_shows_the_context_and_the_cost_split(self) -> None:
         row = {"task": "t1", "arm": "skill", "status": "pass", "passed": 1, "total": 1, "seconds": 1.0,
                "failure": None, "code": None}
@@ -1792,12 +1854,15 @@ class DockerGradingTests(unittest.TestCase):
         python = {"solution.py": "import sys\n\nfrom calc.double import double\n\nprint(double(int(sys.stdin.read())))\n",
                   "calc/__init__.py": "",
                   "calc/double.py": "def double(n: int) -> int:\n    return n * 2\n",
-                  "skills/ignored.py": "this is not python\n"}
+                  "skills/ignored.py": "this is not python\n",
+                  "tests/test_calc.py": "def check(n):\n    return n\n",
+                  "calc/double_test.py": "def check(n):\n    return n  # type: ignore\n"}
         go = {"solution.go": 'package main\n\nimport (\n\t"fmt"\n\t"io"\n\t"os"\n\t"strconv"\n\t"strings"\n\n'
                              '\t"solution/calc"\n)\n\nfunc main() {\n\tdata, _ := io.ReadAll(os.Stdin)\n'
                              '\tn, err := strconv.Atoi(strings.TrimSpace(string(data)))\n\tif err != nil {\n'
                              '\t\tpanic(err)\n\t}\n\tfmt.Println(calc.Double(n))\n}\n',
-              "calc/calc.go": "package calc\n\nfunc Double(n int) int { return n * 2 }\n"}
+              "calc/calc.go": "package calc\n\nfunc Double(n int) int { return n * 2 }\n",
+              "calc/calc_test.go": 'package calc\n\nimport "fmt"\n\nfunc helper() { fmt.Printf("%d", "x") }\n'}
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             task = root / "tasks" / "tree"
@@ -1828,7 +1893,8 @@ class DockerGradingTests(unittest.TestCase):
                 self.assertEqual((row["status"], row["passed"], row["total"]), ("pass", 3, 3))
                 self.assertEqual((row["adversarial_passed"], row["adversarial_total"], row["crash_cases"]), (1, 2, 1))
                 self.assertEqual((row["regressions"], row["hygiene_failed"]), (0, 0))
-        # mypy checks the module that solution.py imports, not only solution.py.
+        # The agent's own tests are not graded (an unannotated test, a vet error in a _test.go file); mypy checks the
+        # module that solution.py imports, not only solution.py.
         self.assertEqual((results["typed-python-bad"]["status"], results["typed-python-bad"]["failure"]),
                          ("fail", "check"))
 

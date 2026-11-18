@@ -533,8 +533,9 @@ two optional files, which the integration and big-data tasks use:
   after it (`sys.argv[2:]`), and compares what the driver prints. The driver is
   Python standard library only and the independent peer: it runs the solution
   with an absolute path (`/workspace/bin/agentica /workspace/solution.agc`, or
-  `python3 -I /workspace/solution.py`), serves or calls it on `127.0.0.1` port
-  0, creates its fixtures in a temporary directory, and prints a transcript. The
+  `python3 -I /workspace/solution.py`; for a tree task see below), serves or
+  calls it on `127.0.0.1` port 0, creates its fixtures in a temporary
+  directory, and prints a transcript. The
   driver source is never mounted and is read from the standard input, so it is
   in no file and in no `/proc/*/cmdline`; the harness does not defend against a
   solution that reads the memory of its parent process. The case content is in
@@ -564,19 +565,35 @@ Python solution that ignores the instruction still passes.
 A tree task's solution spans several files. The task has `reference/<ext>/`
 (`agc`, `py`, `go`) instead of `reference.<ext>`, each a whole tree with its
 entry point `solution.<ext>`, and may have `start/<ext>/`, a tree the
-workspace starts from (the program to change). The solution is
-`solution.<ext>` and every other file of the arm's language in the workspace,
-outside `bin/`, `skills/`, `deps/`, `docs/`, `examples/`, `start/`, hidden
-folders and links (at most 200 files); the grader copies them all, and the run
-keeps them under `solution/`.
+workspace starts from (the program to change; `--check-starts` needs one per
+language).
 
-- Python runs as `python3 -s -E solution.py`, so it imports its own modules;
-  the typed arm checks every file with `mypy --strict --explicit-package-bases`.
+The solution is `solution.<ext>` and every other `.<ext>` file of the
+workspace. These are left out, and the prompt says so:
+
+- the reserved folders the harness fills (`bin/`, `skills/`, `deps/`,
+  `docs/`, `examples/`), hidden files and folders, and links (also files
+  under a linked folder);
+- the agent's own tests: `test_*.py`, `*_test.py`, `*_test.go`,
+  `*_test.agc`, and anything under a `tests/` folder;
+- any other file (data, `.pyi`, `go:embed`).
+
+More than 200 files, or a file over 1 MiB, fails the run with failure `size`
+(code `too-many-files` or `too-large`), and a file the grader cannot read
+with failure `copy`, before any case runs. The grader copies the files
+(`solution.<ext>` first), and the run keeps them under `solution/`.
+
+- Python runs as `python3 -s -E solution.py` (also under a driver), so it
+  imports its own modules. The typed arm runs `mypy --strict
+  --explicit-package-bases -- FILES` on the graded files.
 - Go is the module `solution`: package main in the root, other packages in
   subfolders (`solution/<folder>`), checked with `go vet ./...` and
-  `go build .`.
+  `go build -o .solution-bin .`. A `_test.go` file is not copied, so vet
+  never sees it.
 - Agentica imports its files by relative path.
-- An edit of any `.agc`, `.py` or `.go` file counts for `fix_rounds`.
+- `fix_rounds` counts an edit of any graded file: an edit tool, or a shell
+  write in the forms of single-file tasks (`>`, `tee`, `sed -i`, `cp`/`mv`,
+  `open(..., 'w')`). An edit of a test file is not one.
 - `agent_timeout` in the task folder raises `--timeout` for that task.
 - An `ecosystem` file in the task folder makes it an ecosystem task (see "The
   ecosystem tasks") without a start that imports a package.
@@ -590,13 +607,24 @@ A hidden case's name prefix puts it in a tier, in any task:
 | `hyg-` | hygiene: shutdown, leaks, exit code | yes | `hygiene_failed` |
 | none | main | yes | `passed` of `total` |
 
-`passed` and `total` leave the adversarial cases out. `crash_cases` counts the
-failed cases of any tier that ended in a crash (a traceback, `panic:`,
-`fatal error:` or a `RUNTIME-` error) rather than a wrong answer. A run whose
-cases did not run (no file, or a failed check) fails every regression and
-hygiene case. `spec_runs` counts `agentica test`, `python3 -m unittest`
-(or `pytest`) and `go test` calls. `summary.md` adds a table per arm with
-these, the share of cases passed and the spend per passing run.
+`passed` and `total` leave the adversarial cases out; a task needs at least
+one other case. A run whose cases did not run (no file, a failed check, a
+`size` or `copy` failure) fails every regression and hygiene case.
+
+`crash_cases` counts the failed cases that crashed rather than gave a wrong
+answer: the stderr shows a crash (a traceback, `panic:`, `fatal error:` or
+`error[RUNTIME-`), and the program exited non-zero. Under a driver the exit
+status is the driver's and the stderr is the program's, which the driver
+passes on, so the crash marker alone counts.
+
+`spec_runs` counts runs of the agent's own tests: `agentica test`,
+`python3 -m unittest`, `pytest` (alone or with `-m`), `go test`, and a test
+file run directly (`python3 tests/test_x.py`, `agentica x_test.agc`). It comes
+from Pi's transcript, so rows of the claude and reference agents have none
+(`-`).
+
+`summary.md` adds a table per arm with these, the share of cases passed and
+the spend per passing run.
 
 ### Before a round
 
