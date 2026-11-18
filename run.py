@@ -141,7 +141,8 @@ CASE_TIMEOUT = 10
 TREE_SKIP = {"bin", "skills", "deps", "docs", "examples"}
 TREE_LIMIT = 200
 TREE_FILE_LIMIT = 1 << 20
-TEST_FILE = re.compile(r"(?:^|/)(?:tests/|test_[^/]*\.py$|[^/]*_test\.(?:py|go|agc)$)")
+TEST_FILE = re.compile(r"(?:^|/)(?:(?:tests?|specs)/|test_[^/]*\.py$|tests?\.py$|conftest\.py$|[^/]*_test\.(?:py|go|agc)$)")
+PROGRAM_EXIT = re.compile(r"^PROGRAM-EXIT (-?\d+)$", re.MULTILINE)
 # The tree build writes a hidden name, which no source folder can take (hidden folders are not graded).
 GO_TREE_BINARY = ".solution-bin"
 GO_TREE_VET = ["go", "vet", "./..."]
@@ -361,8 +362,8 @@ def agent_timeout(task: str, default: int) -> int:
 
 
 def test_file(relative: Path) -> bool:
-    """A test of the agent's own (test_*.py, *_test.py, *_test.go, *_test.agc, or under a tests/ folder): never
-    graded, checked or scanned."""
+    """A test of the agent's own (test_*.py, test.py, tests.py, conftest.py, *_test.py, *_test.go, *_test.agc, or
+    under a test/, tests/ or specs/ folder): never graded, checked or scanned."""
     return TEST_FILE.search(relative.as_posix()) is not None
 
 
@@ -502,7 +503,8 @@ def tree_prompt(work: Path, arm: str) -> str:
     ext = ARMS[arm]
     graded = (f" Only the .{ext} files are graded, so the program needs no other file (no data files"
               f"{', no go:embed' if ext == 'go' else ', no .pyi' if ext == 'py' else ''}). Your own tests are not "
-              f"graded: test_*.py, *_test.{ext} and anything under a tests/ folder. The folders "
+              f"graded: test_*.py, test.py, tests.py, conftest.py, *_test.{ext} and anything under a test/, tests/ or "
+              f"specs/ folder. The folders "
               f"{', '.join(sorted(TREE_SKIP))} and hidden folders are reserved: no program files there.")
     return tree_layout(work, arm) + graded
 
@@ -1367,8 +1369,8 @@ def grade(solution: Path, task: str, arm: str, args: argparse.Namespace, scratch
                   if args.sandbox == "firejail" else scratch / f"{name}-grader-root")
     work = grade_root / WORKSPACE.relative_to("/")
     work.mkdir(parents=True)
-    files = solution_files(solution.parent, ext) if tree else [Path(solution.name)]
     try:
+        files = solution_files(solution.parent, ext) if tree else [Path(solution.name)]
         problem = tree_problem(solution.parent, files) if tree else None
         if problem is not None:
             return {"status": "fail", "passed": 0, "total": main_total, "failure": "size", "code": problem}
@@ -1423,7 +1425,7 @@ def grade(solution: Path, task: str, arm: str, args: argparse.Namespace, scratch
             continue
         failed_cases.append(case.stem)
         kind, kind_code = classify(err, ext)
-        counts["crash_cases"] += crashed(kind, returncode, driver is not None)
+        counts["crash_cases"] += crashed(kind, returncode, err, driver is not None)
         counts["regressions"] += tier == REGRESSION
         counts["hygiene_failed"] += tier == HYGIENE
         if failure is None and tier != ADVERSARIAL:
@@ -1432,11 +1434,16 @@ def grade(solution: Path, task: str, arm: str, args: argparse.Namespace, scratch
             "failure": failure, "code": code, **counts, "failed_cases": failed_cases, **extra}
 
 
-def crashed(kind: str, returncode: int | None, driven: bool) -> bool:
+def crashed(kind: str, returncode: int | None, err: str, driven: bool) -> bool:
     """A failed case crashed when its stderr shows a crash (classify gives `runtime`: a traceback, `panic:`,
     `fatal error:` or `error[RUNTIME-`) and the program exited non-zero. Under a driver the exit status is the
-    driver's, and the program's stderr is what the driver passes on, so the marker alone counts."""
-    return kind == "runtime" and (driven or returncode not in (0, None))
+    driver's: the driver passes on the program's stderr and adds a `PROGRAM-EXIT CODE` line when the program ended
+    on its own, so a crash needs such a line with a code other than 0."""
+    if kind != "runtime":
+        return False
+    if driven:
+        return any(int(code) != 0 for code in PROGRAM_EXIT.findall(err))
+    return returncode not in (0, None)
 
 
 def classify(err: str, ext: str) -> tuple[str, str | None]:
@@ -1499,9 +1506,12 @@ def one_run(args: argparse.Namespace, results: Path, scratch: Path, task: str, a
     run_dir.mkdir(parents=True)
     (run_dir / "agent.jsonl").write_text(out, encoding="utf-8")
     (run_dir / "agent.stderr").write_text(err, encoding="utf-8")
-    kept = [Path(solution.name)] if not tree else [
-        Path("solution") / relative for relative in solution_files(work, ARMS[arm])[:TREE_LIMIT]
-        if (work / relative).stat().st_size <= TREE_FILE_LIMIT]
+    try:
+        kept = [Path(solution.name)] if not tree else [
+            Path("solution") / relative for relative in solution_files(work, ARMS[arm])[:TREE_LIMIT]
+            if (work / relative).stat().st_size <= TREE_FILE_LIMIT]
+    except OSError:
+        kept = []
     for relative in kept:
         source = work / relative.relative_to("solution") if tree else solution
         (run_dir / relative).parent.mkdir(parents=True, exist_ok=True)

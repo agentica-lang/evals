@@ -981,12 +981,14 @@ class TreeTaskTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             work = Path(directory)
             for name in ("solution.py", "lib/money.py", "tests/test_money.py", "skills/x/tool.py", "bin/run.py",
+                         "test.py", "lib/conftest.py", "specs/money.py", "test/helpers.py", "lib/latest.py",
                          "deps/pkg/a.py", ".hidden/b.py", "notes.md", "solution.agc"):
                 (work / name).parent.mkdir(parents=True, exist_ok=True)
                 (work / name).write_text("", encoding="utf-8")
             (work / "linked.py").symlink_to(work / "solution.py")
             (work / "linked-dir").symlink_to(work / "lib")
-            self.assertEqual(run.solution_files(work, "py"), [Path("solution.py"), Path("lib/money.py")])
+            self.assertEqual(run.solution_files(work, "py"),
+                             [Path("solution.py"), Path("lib/latest.py"), Path("lib/money.py")])
 
     def test_a_tree_too_big_or_unreadable_fails_before_any_case_runs(self) -> None:
         args = Namespace(sandbox="docker", image=run.DEFAULT_IMAGE, chroot_root=None)
@@ -1003,14 +1005,19 @@ class TreeTaskTests(unittest.TestCase):
                 for relative, text in {"solution.py": "", **files}.items():
                     (work / relative).parent.mkdir(parents=True, exist_ok=True)
                     (work / relative).write_text(text, encoding="utf-8")
-                if name == "unreadable":
-                    (work / "lib" / "secret.py").chmod(0)
                 scratch = root / f"{name}-scratch"
                 scratch.mkdir()
-                with patch.object(run, "contained_run", side_effect=AssertionError("no case may run")):
+                copy = shutil.copyfile
+
+                def unreadable(source: Path, target: Path) -> object:
+                    if Path(source).name == "secret.py":
+                        raise PermissionError(13, "Permission denied", str(source))
+                    return copy(source, target)
+
+                with (patch.object(run, "contained_run", side_effect=AssertionError("no case may run")),
+                      patch.object(run.shutil, "copyfile", unreadable)):
                     row = run.grade(work / "solution.py", "tree", "python", args, scratch, name)
                 outcomes[name] = (row["status"], row["failure"], row["code"], row["total"])
-            (root / "unreadable" / "lib" / "secret.py").chmod(0o600)
         self.assertEqual(outcomes, {"many": ("fail", "size", "too-many-files", 1),
                                     "large": ("fail", "size", "too-large", 1),
                                     "unreadable": ("fail", "copy", None, 1)})
@@ -1022,9 +1029,14 @@ class TreeTaskTests(unittest.TestCase):
         self.assertEqual(run.case_invocation("go", None, "x", tree=True), (["/workspace/.solution-bin"], "x"))
 
     def test_a_crash_is_a_crash_marker_and_a_non_zero_exit_or_a_driver(self) -> None:
-        self.assertEqual([run.crashed("runtime", 1, False), run.crashed("runtime", 0, False),
-                          run.crashed("runtime", 0, True), run.crashed("logic", 1, False),
-                          run.crashed("runtime", None, False)], [True, False, True, False, False])
+        self.assertEqual([run.crashed("runtime", 1, "", False), run.crashed("runtime", 0, "", False),
+                          run.crashed("logic", 1, "", False), run.crashed("runtime", None, "", False)],
+                         [True, False, False, False])
+        # Under a driver, the program's own exit decides: a handled error's traceback with exit 0, or a server the
+        # driver stopped (no PROGRAM-EXIT line), is no crash.
+        self.assertEqual([run.crashed("runtime", 0, "Traceback\nPROGRAM-EXIT 1\n", True),
+                          run.crashed("runtime", 0, "Traceback\nPROGRAM-EXIT 0\n", True),
+                          run.crashed("runtime", 0, "Traceback\n", True)], [True, False, False])
 
     def test_a_missing_start_tree_stops_with_its_name(self) -> None:
         with tempfile.TemporaryDirectory() as directory, patch.object(run, "TASKS", Path(directory) / "tasks"):

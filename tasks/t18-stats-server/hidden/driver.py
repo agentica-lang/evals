@@ -66,7 +66,8 @@ def main():
     else:
         for line in script:
             print(request(port, line))
-    if proc.poll() is None:
+    exited = proc.poll() is not None
+    if not exited:
         os.killpg(proc.pid, signal.SIGTERM)
         try:
             proc.wait(timeout=5)
@@ -74,6 +75,8 @@ def main():
             os.killpg(proc.pid, signal.SIGKILL)
             proc.wait()
     sys.stderr.write(proc.stderr.read().decode("utf-8", "replace"))
+    if exited:
+        sys.stderr.write(f"PROGRAM-EXIT {proc.returncode}\n")
 
 
 main()
