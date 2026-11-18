@@ -345,7 +345,8 @@ class PrepareTests(unittest.TestCase):
 
     def test_the_tasks_available_in_go(self) -> None:
         # Each part of the Go arm adds its tasks here.
-        available = sorted(task.name for task in run.TASKS.iterdir() if (task / "reference.go").is_file())
+        available = sorted((task.name for task in run.TASKS.iterdir() if (task / "reference.go").is_file()),
+                           key=lambda name: int(name[1:].split("-")[0]))
         self.assertEqual(available, ["t1-stats", "t2-fix-types", "t3-struct-change", "t4-word-count",
                                      "t5-scope-return", "t6-json-catalog", "t7-json-stream", "t8-enum-ledger",
                                      "t9-inventory-orders", "t10-calc-extend", "t12-member-ids"])
