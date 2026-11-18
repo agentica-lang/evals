@@ -172,7 +172,7 @@ def main(argv: list[str] | None = None) -> int:
         "roots",
         nargs="*",
         type=Path,
-        help="result directories (default: every valid run under tests/eval/results)",
+        help="result directories (default: every valid run under results/)",
     )
     parser.add_argument(
         "--arms",

@@ -1,10 +1,13 @@
 import contextlib
+import functools
+import hashlib
 import io
 import json
 import os
 import random
 import shutil
 import subprocess
+import tarfile
 import tempfile
 import unittest
 import uuid
@@ -143,19 +146,125 @@ class CandidateBoundaryTests(unittest.TestCase):
             self.assertEqual((outside_home / "agent" / "credentials").read_text(), "old credentials")
 
 
+@functools.cache
+def fetched_sources() -> Path | None:
+    try:
+        return run.fetch_sources(run.AGENTICA_COMMIT)
+    except (OSError, subprocess.CalledProcessError):
+        return None
+
+
+def real_sources() -> Path:
+    """The pinned Agentica sources, fetched once into .cache; the test is skipped when they cannot be fetched
+    (offline)."""
+    sources = fetched_sources()
+    if sources is None:
+        raise unittest.SkipTest(f"cannot fetch {run.AGENTICA_REPO} at {run.AGENTICA_COMMIT[:12]} (offline?)")
+    return sources
+
+
+def real_skill() -> Path:
+    return real_sources() / ".agents" / "skills" / "agentica-programming"
+
+
+def release_archive(binary: bytes) -> bytes:
+    """A release archive with bin/agentica, in the layout of the real one."""
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w:gz") as bundle:
+        info = tarfile.TarInfo(f"agentica-{run.AGENTICA_VERSION}-linux-x86_64/bin/agentica")
+        info.size = len(binary)
+        bundle.addfile(info, io.BytesIO(binary))
+    return buffer.getvalue()
+
+
+def git_in(path: Path, *command: str) -> str:
+    return subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", *command], cwd=path,
+                          check=True, capture_output=True, text=True).stdout.strip()
+
+
+class SupplyChainTests(unittest.TestCase):
+    """The pinned Agentica: the release download and the source checkout, served locally (no network)."""
+
+    def download(self, cache: Path, payload: bytes, sha: str) -> Path:
+        with (patch.object(run, "CACHE", cache), patch.object(run, "AGENTICA_ARCHIVE_SHA256", sha),
+              patch("urllib.request.urlopen", lambda url, timeout: io.BytesIO(payload))):
+            return run.release_binary()
+
+    def test_a_wrong_sha_stops_and_leaves_nothing_and_the_right_one_extracts_the_binary(self) -> None:
+        payload = release_archive(b"#!/bin/sh\necho 0.34.1\n")
+        right = hashlib.sha256(payload).hexdigest()
+        with tempfile.TemporaryDirectory() as directory:
+            cache = Path(directory)
+            with self.assertRaises(SystemExit) as raised:
+                self.download(cache, payload, "0" * 64)
+            left_after_failure = sorted(path.name for path in cache.iterdir())
+            binary = self.download(cache, payload, right)
+
+            self.assertIn("does not match its pinned SHA-256", str(raised.exception))
+            self.assertEqual(left_after_failure, [])
+            self.assertEqual(binary, cache / f"agentica-{run.AGENTICA_VERSION}-{right[:12]}" / "agentica")
+            self.assertEqual(binary.read_bytes(), b"#!/bin/sh\necho 0.34.1\n")
+            self.assertEqual(sorted(path.name for path in cache.iterdir()),
+                             sorted([run.AGENTICA_ARCHIVE, binary.parent.name]))
+
+    def test_fetch_sources_checks_out_the_pinned_commit_and_recovers_from_a_failed_fetch(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            upstream = Path(directory) / "agentica"
+            for path in run.SOURCE_PATHS:
+                (upstream / path).mkdir(parents=True)
+                (upstream / path / "README.md").write_text("pinned\n")
+            (upstream / "vm").mkdir()
+            (upstream / "vm" / "big.c").write_text("not wanted\n")
+            git_in(upstream, "init", "-q")
+            git_in(upstream, "config", "uploadpack.allowAnySHA1InWant", "true")
+            git_in(upstream, "add", ".")
+            git_in(upstream, "commit", "-q", "-m", "pinned")
+            pinned = git_in(upstream, "rev-parse", "HEAD")
+            (upstream / "examples" / "README.md").write_text("later\n")
+            git_in(upstream, "commit", "-q", "-am", "later")
+            cache = Path(directory) / "cache"
+            broken = cache / f"agentica-{pinned[:12]}"
+            cache.mkdir()
+            git_in(cache, "init", "-q", broken.name)
+            with patch.object(run, "CACHE", cache), patch.object(run, "AGENTICA_REPO", upstream.as_uri()):
+                checkout = run.fetch_sources(pinned)
+                again = run.fetch_sources(pinned)
+
+            self.assertEqual((checkout, again), (broken, broken))
+            self.assertEqual(git_in(checkout, "rev-parse", "HEAD"), pinned)
+            self.assertEqual((checkout / "examples" / "README.md").read_text(), "pinned\n")
+            self.assertFalse((checkout / "vm").exists())
+
+    def test_run_json_records_the_agentica_under_test_only_when_an_arm_runs_it(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            runtime = Path(directory) / "runtime"
+            (runtime / "bin").mkdir(parents=True)
+            (runtime / "bin" / "agentica").write_bytes(b"binary")
+            args = Namespace(agentica=Path("/x/agentica"), agentica_src=None)
+            with (patch.object(run, "RUNTIME", runtime), patch.object(run, "agentica_version", return_value="0.34.1"),
+                  patch.object(run, "git_output", return_value="abc123")):
+                used = run.agentica_info(args, True)
+                unused = run.agentica_info(args, False)
+
+        self.assertEqual(used, {"agentica_version": "0.34.1", "agentica_commit": "abc123",
+                                "agentica_binary_sha256": hashlib.sha256(b"binary").hexdigest(),
+                                "agentica_override": True, "agentica_src_override": False})
+        self.assertEqual((unused["agentica_version"], unused["agentica_binary_sha256"]), (None, None))
+
+
 class PrepareTests(unittest.TestCase):
     def test_grammar_arm_writes_the_whole_specification(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "dist" / "runtime").mkdir(parents=True)
             (root / "examples").mkdir()
-            shutil.copytree(run.ROOT / "docs" / "grammar", root / "docs" / "grammar")
-            shutil.copytree(run.ROOT / "site" / "content" / "library", root / "site" / "content" / "library")
+            shutil.copytree(real_sources() / "docs" / "grammar", root / "docs" / "grammar")
+            shutil.copytree(real_sources() / "site" / "content" / "library", root / "site" / "content" / "library")
             task = root / "tasks" / "sample"
             task.mkdir(parents=True)
             (task / "task.md").write_text("Sample task.\n", encoding="utf-8")
             work = root / "work"
-            with patch.object(run, "ROOT", root), patch.object(run, "TASKS", root / "tasks"):
+            with patch.object(run, "ROOT", root), patch.object(run, "RUNTIME", root / "dist" / "runtime"), patch.object(run, "TASKS", root / "tasks"):
                 run.prepare(work, "sample", "grammar")
 
             grammar = (work / "docs" / "grammar.md").read_text(encoding="utf-8")
@@ -195,7 +304,7 @@ class PrepareTests(unittest.TestCase):
             (task / "start.py").write_text("untyped\n", encoding="utf-8")
             (task / "start.typed.py").write_text("typed\n", encoding="utf-8")
             (task / "start.agc").write_text("agentica\n", encoding="utf-8")
-            with patch.object(run, "ROOT", root), patch.object(run, "TASKS", root / "tasks"):
+            with patch.object(run, "ROOT", root), patch.object(run, "RUNTIME", root / "dist" / "runtime"), patch.object(run, "TASKS", root / "tasks"):
                 for arm, start, runtime in (("typed-python", "typed\n", False), ("python", "untyped\n", False),
                                             ("binary", "agentica\n", True)):
                     work = root / f"work-{arm}"
@@ -214,7 +323,7 @@ class PrepareTests(unittest.TestCase):
                 (tasks / name).mkdir(parents=True)
                 (tasks / name / "task.md").write_text("Sample task.\n", encoding="utf-8")
             (tasks / "plain" / "start.py").write_text("untyped\n", encoding="utf-8")
-            with patch.object(run, "ROOT", root), patch.object(run, "TASKS", tasks):
+            with patch.object(run, "ROOT", root), patch.object(run, "RUNTIME", root / "dist" / "runtime"), patch.object(run, "TASKS", tasks):
                 self.assertEqual(run.start_file("plain", "typed-python"), tasks / "plain" / "start.py")
                 run.prepare(root / "work-plain", "plain", "typed-python")
                 run.prepare(root / "work-nostart", "nostart", "typed-python")
@@ -225,6 +334,7 @@ class PrepareTests(unittest.TestCase):
 
 class NoCliArmTests(unittest.TestCase):
     def fake_runtime(self, root: Path) -> None:
+        shutil.copytree(real_skill(), root / ".agents" / "skills" / "agentica-programming")
         binary = root / "dist" / "runtime" / "bin" / "agentica"
         binary.parent.mkdir(parents=True)
         binary.write_text('#!/bin/sh\necho "real $*"\nexit 3\n')
@@ -236,7 +346,7 @@ class NoCliArmTests(unittest.TestCase):
     def prepare_in(self, root: Path, *arms: str) -> None:
         """Prepare work-ARM for each arm in a fake root with a fake runtime."""
         self.fake_runtime(root)
-        with patch.object(run, "ROOT", root), patch.object(run, "TASKS", root / "tasks"):
+        with patch.object(run, "ROOT", root), patch.object(run, "RUNTIME", root / "dist" / "runtime"), patch.object(run, "TASKS", root / "tasks"):
             for arm in arms:
                 run.prepare(root / f"work-{arm}", "sample", arm)
 
@@ -251,14 +361,14 @@ class NoCliArmTests(unittest.TestCase):
             self.assertTrue((skill / "SKILL.md").is_file())
             for path in skill.rglob("*.md"):
                 self.assertIsNone(run.QUERY_MENTION.search(path.read_text(encoding="utf-8")), path)
-            self.assertTrue((run.SKILL / "references" / "queries.md").is_file())
+            self.assertTrue((real_skill() / "references" / "queries.md").is_file())
             self.assertTrue((root / "work-skill" / "skills" / "agentica-programming" / "references" / "queries.md").is_file())
             self.assertIn("Use the agentica-programming skill.", run.prompt(root / "work-skill-nocli", "skill-nocli"))
 
     def test_a_skill_that_still_names_the_commands_stops_the_arm(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             skill = Path(directory) / "skill"
-            shutil.copytree(run.SKILL, skill)
+            shutil.copytree(real_skill(), skill)
             (skill / "references" / "files.md").write_text("Try `agentica refs NAME`.\n", encoding="utf-8")
             with self.assertRaises(SystemExit) as raised:
                 run.strip_query_docs(skill)
@@ -317,7 +427,7 @@ def legacy_pi_metrics(out: str) -> dict[str, int]:
         kind = event.get("type")
         if kind == "tool_execution_start":
             command = event.get("args", {}).get("command", "")
-            m["outside_reads"] += str(run.ROOT) in json.dumps(event.get("args", {}))
+            m["outside_reads"] += str(run.EVAL) in json.dumps(event.get("args", {}))
             m["net_commands"] += run.is_net_command(command)
             if event.get("toolName") == "bash":
                 m["query_runs"] += run.is_query_command(command)
@@ -742,8 +852,9 @@ class MainTests(unittest.TestCase):
             validated.append((image, typed, agentica))
             return {"checker": "mypy 9.9", "image_id": "sha256:feed", "pi": "1.3.0" if pi else None}
 
-        with (patch.object(run, "ROOT", root), patch.object(run, "EVAL", root / "eval"),
-              patch.object(run, "build") as build, patch.object(run, "require_docker"),
+        with (patch.object(run, "ROOT", root), patch.object(run, "RUNTIME", root / "dist" / "runtime"), patch.object(run, "EVAL", root / "eval"),
+              patch.object(run, "install_runtime") as build, patch.object(run, "use_sources"),
+              patch.object(run, "require_docker"),
               patch.object(run, "validate_docker", fake_validate), patch.object(run, "one_run", fake_one_run),
               patch.object(run, "run_preflight") as preflight,
               patch.dict(os.environ, {"FOO": "bar"}), patch("sys.argv", ["run.py", *argv]),
@@ -785,6 +896,8 @@ class MainTests(unittest.TestCase):
         self.assertEqual(normal_validated, [(run.DEFAULT_IMAGE, True, True)])
         self.assertEqual((normal["agent_network"], normal["pass_env"]), (True, ["FOO"]))
         self.assertEqual((normal["pi_version"], failing["pi_version"]), ("1.3.0", None))
+        self.assertLessEqual({"agentica_version", "agentica_commit", "agentica_binary_sha256", "agentica_override",
+                              "agentica_src_override"}, set(normal))
 
 
     def runtime_root(self, directory: str) -> Path:

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -7,9 +8,11 @@ import shutil
 import signal
 import subprocess
 import sys
+import tarfile
 import tempfile
 import threading
 import time
+import urllib.request
 import uuid
 from collections import Counter
 from collections.abc import Callable
@@ -17,10 +20,20 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[2]
-EVAL = ROOT / "tests" / "eval"
+EVAL = Path(__file__).resolve().parent
 TASKS = EVAL / "tasks"
-SKILL = ROOT / ".agents" / "skills" / "agentica-programming"
+CACHE = EVAL / ".cache"
+# The pinned Agentica: the release binary the agentica arms run, and the commit of its tag, which gives the skill,
+# the grammar, the library pages and the examples. --agentica and --agentica-src replace them.
+AGENTICA_VERSION = "0.34.1"
+AGENTICA_ARCHIVE = f"agentica-{AGENTICA_VERSION}-linux-x86_64.tar.gz"
+AGENTICA_ARCHIVE_SHA256 = "f1c7caa3947ac5947a87566febb1c4b06f05793bd4f03752b21fd416b44b73db"
+AGENTICA_COMMIT = "d73c9dc5b69e813e783b006fff203760488f3f47"
+AGENTICA_REPO = "https://github.com/agentica-lang/agentica"
+SOURCE_PATHS = [".agents/skills/agentica-programming", "docs/grammar", "site/content/library", "examples"]
+# The Agentica sources and the runtime folder (bin/agentica) copied into each agentica workspace.
+ROOT = CACHE / f"agentica-{AGENTICA_COMMIT[:12]}"
+RUNTIME = CACHE / "runtime"
 ARMS = {"skill": "agc", "grammar": "agc", "binary": "agc", "python": "py", "typed-python": "py", "skill-nocli": "agc"}
 TYPED_ARMS = {"typed-python"}
 SKILL_ARMS = {"skill", "skill-nocli"}
@@ -120,12 +133,77 @@ PRICES = {
 }
 
 
-def build() -> None:
-    subprocess.run(["make"], cwd=ROOT, check=True, stdout=subprocess.DEVNULL)
-    runtime = ROOT / "dist" / "runtime"
-    shutil.rmtree(runtime, ignore_errors=True)
-    (runtime / "bin").mkdir(parents=True)
-    shutil.copy2(ROOT / "dist" / "agentica", runtime / "bin" / "agentica")
+def skill_dir() -> Path:
+    return ROOT / ".agents" / "skills" / "agentica-programming"
+
+
+def git(*command: str, cwd: Path) -> str:
+    return subprocess.run(["git", *command], cwd=cwd, check=True, capture_output=True, text=True).stdout.strip()
+
+
+def fetch_sources(commit: str) -> Path:
+    """A sparse, shallow checkout of the Agentica commit under .cache; git checks the commit hash."""
+    target = CACHE / f"agentica-{commit[:12]}"
+    try:
+        if (target / ".git").is_dir() and git("rev-parse", "HEAD", cwd=target) == commit:
+            return target
+    except subprocess.CalledProcessError:
+        pass  # a fetch that failed leaves a repository with no commit: clone again
+
+    shutil.rmtree(target, ignore_errors=True)
+    target.mkdir(parents=True)
+    git("init", "-q", cwd=target)
+    git("sparse-checkout", "set", *SOURCE_PATHS, cwd=target)
+    git("fetch", "-q", "--depth", "1", "--filter=blob:none", AGENTICA_REPO, commit, cwd=target)
+    git("checkout", "-q", "--detach", "FETCH_HEAD", cwd=target)
+    return target
+
+
+def sha256_of(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def release_binary() -> Path:
+    """The agentica binary of the pinned release, downloaded once and checked against its SHA-256."""
+    archive = CACHE / AGENTICA_ARCHIVE
+    if not archive.is_file() or sha256_of(archive) != AGENTICA_ARCHIVE_SHA256:
+        CACHE.mkdir(parents=True, exist_ok=True)
+        url = f"{AGENTICA_REPO}/releases/download/{AGENTICA_VERSION}/{AGENTICA_ARCHIVE}"
+        with tempfile.NamedTemporaryFile(dir=CACHE, prefix=f".{AGENTICA_ARCHIVE}.", delete=False) as handle:
+            partial = Path(handle.name)
+        try:
+            with urllib.request.urlopen(url, timeout=120) as response, partial.open("wb") as out:
+                shutil.copyfileobj(response, out)
+            if sha256_of(partial) != AGENTICA_ARCHIVE_SHA256:
+                raise SystemExit(f"{url} does not match its pinned SHA-256")
+            partial.replace(archive)
+        finally:
+            partial.unlink(missing_ok=True)
+    binary = CACHE / f"agentica-{AGENTICA_VERSION}-{AGENTICA_ARCHIVE_SHA256[:12]}" / "agentica"
+    if not binary.is_file():
+        member = f"agentica-{AGENTICA_VERSION}-linux-x86_64/bin/agentica"
+        with tarfile.open(archive) as bundle:
+            source = bundle.extractfile(member)
+            if source is None:
+                raise SystemExit(f"{archive} has no {member}")
+            binary.parent.mkdir(parents=True, exist_ok=True)
+            binary.write_bytes(source.read())
+    return binary
+
+
+def install_runtime(binary: Path | None) -> None:
+    """Put the agentica binary (the pinned release, or --agentica PATH) in RUNTIME/bin."""
+    source = binary or release_binary()
+    if not source.is_file():
+        raise SystemExit(f"--agentica: no such file: {source}")
+    shutil.rmtree(RUNTIME, ignore_errors=True)
+    (RUNTIME / "bin").mkdir(parents=True)
+    shutil.copyfile(source, RUNTIME / "bin" / "agentica")
+    (RUNTIME / "bin" / "agentica").chmod(0o755)
 
 
 def clone_rootfs(template: Path, destination: Path) -> Path:
@@ -165,10 +243,10 @@ def prepare(work: Path, task: str, arm: str) -> None:
     if start.exists():
         shutil.copy(start, work / f"start.{ext}")
     if ext == "agc":
-        shutil.copytree(ROOT / "dist" / "runtime", work, dirs_exist_ok=True)
+        shutil.copytree(RUNTIME, work, dirs_exist_ok=True)
     if arm in SKILL_ARMS:
         (work / "skills").mkdir()
-        shutil.copytree(SKILL, work / "skills" / "agentica-programming")
+        shutil.copytree(skill_dir(), work / "skills" / "agentica-programming")
     if arm == "skill-nocli":
         strip_query_docs(work / "skills" / "agentica-programming")
         install_query_wrapper(work / "bin")
@@ -399,7 +477,7 @@ def checker_version(image: str) -> str | None:
 def runtime_probe(image: str) -> tuple[bool, str]:
     with tempfile.TemporaryDirectory(prefix="agentica-runtime-probe-") as directory:
         work = Path(directory)
-        shutil.copytree(ROOT / "dist" / "runtime", work, dirs_exist_ok=True)
+        shutil.copytree(RUNTIME, work, dirs_exist_ok=True)
         (work / "hello.agc").write_text('def main() -> Void\n  puts("hello")\nend\n', encoding="utf-8")
         code, out, err = probe(image, [str(WORKSPACE / "bin" / "agentica"), "hello.agc"], work, 60)
     return code == 0 and out.strip() == "hello", err.strip() or out.strip()
@@ -408,12 +486,12 @@ def runtime_probe(image: str) -> tuple[bool, str]:
 def ensure_checker(image: str) -> str:
     code, out, err = checker_probe(image)
     if code in MISSING_COMMAND and image == DEFAULT_IMAGE:
-        print(f"{CHECKER[0]} is missing from {image} (exit {code}): rebuilding the image from tests/eval/Dockerfile", flush=True)
+        print(f"{CHECKER[0]} is missing from {image} (exit {code}): rebuilding the image from Dockerfile", flush=True)
         build_image(image)
         code, out, err = checker_probe(image)
     if code != 0:
         reason = "it timed out" if code is None else f"it exited {code}: {err.strip()}"
-        hint = " Rebuild the image from tests/eval/Dockerfile." if code in MISSING_COMMAND else ""
+        hint = " Rebuild the image from Dockerfile." if code in MISSING_COMMAND else ""
         raise SystemExit(f"{CHECKER[0]} --version failed in the Docker image {image} ({reason}); the typed-python arm needs it.{hint}")
     return out.strip()
 
@@ -421,12 +499,12 @@ def ensure_checker(image: str) -> str:
 def ensure_runtime(image: str) -> None:
     works, details = runtime_probe(image)
     if not works and image == DEFAULT_IMAGE:
-        print(f"{image} cannot run dist/runtime/bin/agentica ({details}): rebuilding the image from tests/eval/Dockerfile", flush=True)
+        print(f"{image} cannot run the agentica binary ({details}): rebuilding the image from Dockerfile", flush=True)
         build_image(image)
         works, details = runtime_probe(image)
     if not works:
-        raise SystemExit(f"The Docker image {image} cannot run dist/runtime/bin/agentica ({details}). "
-                         "Rebuild it from tests/eval/Dockerfile (docker build --tag IMAGE tests/eval); "
+        raise SystemExit(f"The Docker image {image} cannot run the agentica binary ({details}). "
+                         "Rebuild it from Dockerfile (docker build --tag IMAGE .); "
                          "if it still fails, the VM needs a newer libc or other libraries than the image has.")
 
 
@@ -444,7 +522,7 @@ def ensure_pi(image: str) -> str | None:
     version = found.group(0) if found else None
     wanted = dockerfile_pi_version()
     if image == DEFAULT_IMAGE and version != wanted:
-        raise SystemExit(f"{image} has Pi {version or 'that does not run (' + err.strip() + ')'}, but tests/eval/Dockerfile "
+        raise SystemExit(f"{image} has Pi {version or 'that does not run (' + err.strip() + ')'}, but Dockerfile "
                          f"pins {wanted}. Remove the stale image (docker rmi {image}) and rerun to rebuild it.")
     return version
 
@@ -754,7 +832,7 @@ def call_metrics(calls: list[Call]) -> dict[str, int]:
          "outside_reads": 0, "net_commands": 0, "query_runs": 0, "read_runs": 0}
     awaiting_fix = False
     for call in calls:
-        if str(ROOT) in json.dumps(call.args):
+        if str(EVAL) in json.dumps(call.args):
             m["outside_reads"] += 1
         command = call.args.get("command", "") if call.tool == "bash" else ""
         m["net_commands"] += is_net_command(command)
@@ -935,7 +1013,7 @@ def grade(solution: Path, task: str, arm: str, args: argparse.Namespace, scratch
     work.mkdir(parents=True)
     shutil.copyfile(solution, work / solution.name)
     if ext == "agc":
-        shutil.copytree(ROOT / "dist" / "runtime", work, dirs_exist_ok=True)
+        shutil.copytree(RUNTIME, work, dirs_exist_ok=True)
 
     def contained(command: list[str], stdin: str, timeout: int) -> tuple[str | None, str, int | None]:
         return contained_run(args, grade_root, work, command, stdin, timeout)
@@ -1135,16 +1213,34 @@ def read_rows(results: Path) -> list[dict]:
     return [json.loads(line) for line in (results / "results.jsonl").read_text(encoding="utf-8").splitlines()]
 
 
-def git_output(*command: str) -> str:
+def git_output(*command: str, cwd: Path = EVAL) -> str:
     try:
-        return subprocess.run(["git", *command], cwd=ROOT, capture_output=True, text=True, check=True).stdout.strip()
+        return git(*command, cwd=cwd)
     except (OSError, subprocess.CalledProcessError):
         return ""
 
 
-def run_info(args: argparse.Namespace, image_info: dict[str, str | None]) -> dict:
+def agentica_version() -> str:
+    try:
+        done = subprocess.run([str(RUNTIME / "bin" / "agentica"), "--version"], capture_output=True, text=True,
+                              timeout=30)
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    return done.stdout.strip() if done.returncode == 0 else ""
+
+
+def agentica_info(args: argparse.Namespace, used: bool) -> dict:
+    """What run.json records of the Agentica under test; nothing when no arm runs Agentica."""
+    binary = RUNTIME / "bin" / "agentica"
+    return {"agentica_version": agentica_version() if used else None,
+            "agentica_commit": git_output("rev-parse", "HEAD", cwd=ROOT) if used else None,
+            "agentica_binary_sha256": sha256_of(binary) if used and binary.is_file() else None,
+            "agentica_override": args.agentica is not None, "agentica_src_override": args.agentica_src is not None}
+
+
+def run_info(args: argparse.Namespace, image_info: dict[str, str | None], agentica: dict | None = None) -> dict:
     return {"commit": git_output("rev-parse", "HEAD"), "dirty": bool(git_output("status", "--porcelain")),
-            "skill_commit": git_output("log", "-1", "--format=%H", "--", ".agents/skills/agentica-programming"),
+            **(agentica or {}),
             "agent": args.agent, "model": args.model or "default", "arms": args.arms, "tasks": args.tasks,
             "reps": args.reps, "timeout": args.timeout, "sandbox": args.sandbox, "image": args.image,
             "image_id": image_info["image_id"], "checker": image_info["checker"],
@@ -1153,6 +1249,14 @@ def run_info(args: argparse.Namespace, image_info: dict[str, str | None]) -> dic
             "max_cost": args.max_cost, "started_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "pi_auth_file": args.pi_auth is not None,
             "arm_notes": {arm: NOCLI_NOTE for arm in args.arms if arm == "skill-nocli"}}
+
+
+def use_sources(checkout: Path | None) -> None:
+    global ROOT
+    ROOT = checkout.resolve() if checkout is not None else fetch_sources(AGENTICA_COMMIT)
+    missing = [path for path in SOURCE_PATHS if not (ROOT / path).is_dir()]
+    if missing:
+        raise SystemExit(f"{ROOT} is not an agentica checkout: it has no {', '.join(missing)}")
 
 
 def mean_known(rows: list[dict], keys: tuple[str, ...], places: int) -> str:
@@ -1258,7 +1362,7 @@ def main() -> int:
     parser.add_argument("--agent", choices=["pi", "claude", "reference"], default="pi")
     parser.add_argument("--model")
     parser.add_argument("--pi-auth", type=Path, metavar="PATH",
-                        help="a Pi auth.json (such as tests/eval/.secrets/pi-auth.json), mounted read-only in the agent "
+                        help="a Pi auth.json (such as .secrets/pi-auth.json), mounted read-only in the agent "
                              "container and copied to its ~/.pi/agent/auth.json; its keys are redacted from the logs")
     parser.add_argument("--tasks", nargs="*", default=sorted(p.name for p in TASKS.iterdir() if p.is_dir()))
     parser.add_argument("--arms", nargs="*", help=f"default: {' '.join(DEFAULT_ARMS)}; opt-in: {' '.join(sorted(OPT_IN_ARMS))}")
@@ -1274,14 +1378,18 @@ def main() -> int:
     parser.add_argument("--reps", type=int, default=1)
     parser.add_argument("--timeout", type=int, default=600)
     parser.add_argument("--jobs", type=int, default=1, help="runs in parallel")
-    parser.add_argument("--no-build", action="store_true")
+    parser.add_argument("--agentica", type=Path, metavar="PATH",
+                        help=f"the agentica binary to test, built for Linux x86_64 (default: the {AGENTICA_VERSION} "
+                             "release, downloaded and checked)")
+    parser.add_argument("--agentica-src", type=Path, metavar="PATH",
+                        help="an agentica checkout for the skill, the grammar, the library pages and the examples "
+                             f"(default: commit {AGENTICA_COMMIT[:12]}, the {AGENTICA_VERSION} tag)")
     parser.add_argument("--chroot-root", type=Path,
-                        help="prepared minimal Firejail root filesystem; its glibc must run the host-built "
-                             "dist/agentica (as new as the host's, or newer)")
+                        help="prepared minimal Firejail root filesystem; its glibc must run the agentica binary")
     parser.add_argument("--pass-env", action="append", default=[], metavar="NAME",
                         help="pass one provider-auth environment variable to the agent; repeat as needed")
     parser.add_argument("--sandbox", choices=["docker", "firejail"], default="docker",
-                        help="firejail runs the host-built agentica on the chroot's glibc")
+                        help="firejail runs the agentica binary on the chroot's glibc")
     parser.add_argument("--image", default=DEFAULT_IMAGE, help="Docker image; the default is built when missing")
     parser.add_argument("--summarize", metavar="RESULTS_DIR")
     parser.add_argument("--no-preflight", action="store_true",
@@ -1332,10 +1440,9 @@ def main() -> int:
         validate_docker(args.image, pi=True)
         print(json.dumps(run_preflight(args)))
         return 0
-    if not args.no_build:
-        build()
-    if not (ROOT / "dist" / "runtime" / "bin" / "agentica").is_file():
-        raise SystemExit("dist/runtime is missing; rerun without --no-build")
+    if agentica:
+        use_sources(args.agentica_src)
+        install_runtime(args.agentica)
     image_info: dict[str, str | None] = {"checker": None, "image_id": None, "pi": None}
     if args.sandbox == "docker":
         image_info = validate_docker(args.image, typed, agentica, args.agent == "pi")
@@ -1343,7 +1450,7 @@ def main() -> int:
     stamp = time.strftime("%Y%m%d-%H%M%S")
     results = EVAL / "results" / f"{stamp}-{args.agent}"
     results.mkdir(parents=True)
-    (results / "run.json").write_text(json.dumps({**run_info(args, image_info), "preflight": checked}, indent=2) + "\n",
+    (results / "run.json").write_text(json.dumps({**run_info(args, image_info, agentica_info(args, agentica)), "preflight": checked}, indent=2) + "\n",
                                       encoding="utf-8")
     jobs = run_order(args.tasks, args.arms, args.arm_tasks, args.reps)
     budget = Budget(args.max_cost, args.run_cost_estimate)
