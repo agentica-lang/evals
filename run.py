@@ -264,6 +264,11 @@ def prepare(work: Path, task: str, arm: str) -> None:
     ext = ARMS[arm]
     work.mkdir(parents=True, exist_ok=True)
     shutil.copy(TASKS / task / "task.md", work / "task.md")
+    go_note = TASKS / task / "task.go.md"
+    if ext == "go" and go_note.is_file():
+        # task.md is written for Agentica and Python; a task can add what is different in Go.
+        with (work / "task.md").open("a", encoding="utf-8") as handle:
+            handle.write("\n" + go_note.read_text(encoding="utf-8"))
     start = start_file(task, arm)
     if start.exists():
         shutil.copy(start, work / f"start.{ext}")

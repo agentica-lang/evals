@@ -349,7 +349,24 @@ class PrepareTests(unittest.TestCase):
                            key=lambda name: int(name[1:].split("-")[0]))
         self.assertEqual(available, ["t1-stats", "t2-fix-types", "t3-struct-change", "t4-word-count",
                                      "t5-scope-return", "t6-json-catalog", "t7-json-stream", "t8-enum-ledger",
-                                     "t9-inventory-orders", "t10-calc-extend", "t12-member-ids"])
+                                     "t9-inventory-orders", "t10-calc-extend", "t11-gradebook",
+                                     "t12-member-ids", "t13-transfer-variant", "t14-price-lookup"])
+
+    def test_a_go_note_is_added_to_the_task_of_the_go_arm_only(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            task = root / "tasks" / "sample"
+            task.mkdir(parents=True)
+            (task / "task.md").write_text("Sample task.\n", encoding="utf-8")
+            (task / "task.go.md").write_text("In Go, return `(int, bool)`.\n", encoding="utf-8")
+            with patch.object(run, "TASKS", root / "tasks"), patch.object(run, "GO_LANGUAGE", "1.27"):
+                run.prepare(root / "work-go", "sample", "go")
+                run.prepare(root / "work-py", "sample", "typed-python")
+            go_task = (root / "work-go" / "task.md").read_text(encoding="utf-8")
+            python_task = (root / "work-py" / "task.md").read_text(encoding="utf-8")
+
+        self.assertEqual(go_task, "Sample task.\n\nIn Go, return `(int, bool)`.\n")
+        self.assertEqual(python_task, "Sample task.\n")
 
     def test_a_task_without_go_files_is_skipped_by_the_go_arm_only(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
