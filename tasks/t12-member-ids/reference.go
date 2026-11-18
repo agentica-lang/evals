@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"slices"
-	"sort"
 	"strconv"
 	"strings"
 )
@@ -212,7 +211,7 @@ func statusCommand(lib *Library) {
 	for bid := range lib.Books {
 		ids = append(ids, bid)
 	}
-	sort.Strings(ids)
+	slices.Sort(ids)
 	for _, bid := range ids {
 		book := lib.Books[bid]
 		fmt.Printf("%s %s: %d/%d\n", book.ID, book.Title, book.Copies-onLoan(lib, bid), book.Copies)

@@ -34,7 +34,8 @@ The first eight tasks are small programs on stdin and stdout.
 The twelve tasks t9 to t20 are the harder kinds of the 6c comparison (Agentica
 against typed Python), for the pilot. The start programs of t9, t10 and t12 are
 170 to 210 lines in both languages (`wc -l` of `start.agc` and `start.py`); the
-others are 28 to 132 lines.
+others are 28 to 132 lines. Their Go starts are 15 to 25% longer (200 to 231
+lines), mostly from explicit error returns.
 
 | Task | Kind | The agent does |
 |---|---|---|
