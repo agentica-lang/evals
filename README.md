@@ -66,12 +66,15 @@ The arms are the context an agent gets:
   `agentica help` covers the builtins only, so this arm has no signature source
   for the `std/` modules (`HTTP`, `Queue`, `BDD`).
 - `binary`: only the binary, `agentica check`, and a one-line hint. No docs.
+- `go`: the same task in Go, standard library only, checked by `go vet` and
+  `go build`. It is opt-in: `--arms` must name it. See "The Go arm".
 
 The prompts are not equal, and they stay as they are so that rounds remain
 comparable. The `binary` prompt names `agentica check` and `agentica --help`;
 the `skill` prompt names only the skill, which teaches `agentica check`; the
 `grammar` prompt names `agentica help NAME`; the `typed-python` prompt names
-`mypy --strict solution.py`; the `python` prompt names no checker. Read a
+`mypy --strict solution.py`; the `go` prompt names `go vet solution.go` and
+`go build solution.go`; the `python` prompt names no checker. Read a
 difference between arms with that in mind.
 
 ## How to run
@@ -95,7 +98,7 @@ python3 diagnostics.py
 ```
 
 `--tasks` picks tasks (the default is all twenty). `--arms` picks arms (the
-default is the first five; `skill-nocli` is opt-in). `--arm-tasks
+default is every arm but the opt-in `skill-nocli` and `go`). `--arm-tasks
 ARM=TASK,TASK` limits one arm to some of the tasks (full task names, all in
 `--tasks`; repeat the option for another arm). `--max-cost USD` is a soft cap on
 the cost of the round (see "The budget cap"). `--sandbox firejail
@@ -104,16 +107,21 @@ it needs `mypy` for the typed arm. Docker is the only sandbox tested with the
 typed arm, the drivers and the loopback peers; Firejail is untested for them.
 The results go to `results/`, which is not versioned. Each run directory has a
 `run.json` with the commit, the Agentica version and source commit, the checker
-version, the Pi version, the model, the arms, and the image
+version, the Go version, the Pi version, the model, the arms, and the image
 name and ID, next to `results.jsonl` and `summary.md`. The runner has its own
-tests: `python3 -m unittest discover -p 'test_*.py'`. CI runs them and
-`--check-references` on every pull request (no model calls).
+tests: `python3 -m unittest discover -p 'test_*.py'`. CI runs them,
+`--check-references` and `--check-starts` on every pull request (no model
+calls).
 
 `--check-references` is the same as `--agent reference` with the arms `binary`,
-`python` and `typed-python` (the three Agentica arms share one reference). It
-copies each `reference.*` as the solution, grades it like an agent's, prints the
-table, and exits 1 when a reference fails. Use it after any change to a task,
-the runner, the image or the Agentica version.
+`python`, `typed-python` and `go` (the three Agentica arms share one
+reference). It copies each `reference.*` as the solution, grades it like an
+agent's, prints the table, and exits 1 when a reference fails. Use it after any
+change to a task, the runner, the image or the Agentica version.
+
+`--check-starts` grades each `start.go` and the typed Python start of its task
+as solutions, and exits 1 when their status, passed cases or failure kind
+differ, so a Go start keeps the bugs of the Python one.
 
 ### The Agentica under test
 
@@ -211,11 +219,17 @@ by weakening its options.
   the arms: `summary.md` shows their mean in the `type escapes` column.
 - Measures: `interpreter_runs` counts every bash call that runs `agentica`,
   `python`, `mypy` or `go vet|build|run|test`; `check_runs` counts the calls
-  to `mypy` and `agentica check` (both a lower bound: a command is recognised
-  at the start of a shell segment, also after `do`, `then`, `else`, `!`, `{`,
-  `(`, `$(` or a backtick, after the `env`, `time`, `timeout`, `nohup`,
-  `xargs`, `uv run` and `NAME=value` prefixes, and inside `bash -c` or
-  `sh -c`, so a run through another wrapper or a script is not counted).
+  to `mypy`, `agentica check`, `go vet` and `go build`. A `go vet` and a
+  `go build` in calls next to each other, in either order (no edit or other run
+  between), are one interpreter run, one check run and one failure at most,
+  because the Go check is the two commands where the other arms have one (both
+  a lower bound: a
+  command is recognised at the start of a shell segment, also after `do`,
+  `then`, `else`, `!`, `{`, `(`, `$(` or a backtick, after the `env`, `time`,
+  `timeout`, `nohup`, `xargs`, `uv run` and `NAME=value` prefixes, and inside
+  `bash -c` or `sh -c`, so a run through another wrapper or a script is not
+  counted). A program that a `go build` wrote, run through a path
+  (`./solution`, `/tmp/s`), is a run too, and its `panic:` a failure.
   Before 2026-11-18 a call that only named one of them, such as a `sed` of the
   skill's files, also counted, in `interpreter_runs` and, when its output held
   an error line, in `failing_runs`. That inflated the skill arm, so rounds 1–15
@@ -224,9 +238,9 @@ by weakening its options.
   `error[...]` diagnostic); `failing_runs` counts every failing call, checks
   included, so repairs are compared with the checker calls on both sides.
   Tokens, turns, cost and seconds are the same as in the Agentica arms.
-  `diagnostics.py` still counts Agentica diagnostics only. `go vet` and
-  `go build` count as checks too, and a `file.go:N:M:` or `panic:` line as a
-  failure, ready for a Go arm. Only `--agent pi` reports calls:
+  `diagnostics.py` still counts Agentica diagnostics only. A `file.go:N:M:` or
+  `panic:` line is a failure of a Go call (see "The Go arm"). Only
+  `--agent pi` reports calls:
   `--agent claude` gives totals, so its interpreter, check and failing runs
   read 0, which means not measured.
 - Starts: `start.py` of t9 to t19 is typed and passes `mypy --strict`. For t2,
@@ -237,10 +251,81 @@ by weakening its options.
 - The untyped `python` arm stays for comparison with the early rounds. It is not
   part of the typed-Python pilot. Its workspace has no Agentica binaries.
 
+### The Go arm
+
+The `go` arm writes `solution.go`, one `main` package with the standard library
+only (`net/http` for t17 and t18). The workspace has a `go.mod` (`module
+solution`, the Go version of the image), and `start.go` where the task has a
+start. The prompt gives `go run solution.go` and the two checkers,
+`go vet solution.go` and `go build solution.go`, and says not to silence them.
+A task without a `reference.go` is not available in Go yet: the go arm skips
+it and prints a note, and `--check-references` grades go only on the tasks
+that have one.
+
+- Toolchain: Go 1.27.4, pinned with its SHA-256 in `Dockerfile`;
+  `run.json` records `go env GOVERSION`, and the workspace `go.mod` takes its
+  language version from it. The image sets `GOFLAGS=-mod=mod`, `GOPROXY=off`,
+  `GOTOOLCHAIN=local` and `CGO_ENABLED=0`, so Go works offline by default; the
+  agent container has network, so an agent that sets `GOPROXY` itself can
+  still download (`net_commands` counts `go get`, `go install`,
+  `go mod download`, `go mod tidy`, `GOPROXY=`, `golang.org` and `pkg@version`
+  or `@latest`). The image carries a
+  read-only build cache of the whole public standard library (every
+  `go list std` package outside `internal`, `vendor` and `cmd`;
+  `GOCACHE=/opt/go-cache`, about 160 MB). Go reads a read-only cache but cannot
+  add to it, and a package it never indexed is "not in std", so the cache must
+  hold them all; a check then takes under a second instead of half a minute.
+- Grading: `go vet solution.go`, then `go build -o solution solution.go`, in a
+  fresh container with the workspace writable for the binary. A failure is
+  `failure: check` with `code` `vet` or `build` (`syntax` for a syntax error)
+  and `check_errors`, the number of `file.go:line:` lines. The build always
+  runs. `go vet` type-checks first and stops at the first type or syntax error
+  (its `vet: ` line; an unused variable is a type error, so its code is `vet`):
+  then the class (`syntax error` gives `syntax`) and the count come from
+  `go build -gcflags=-e`, so the t2 start has 6 errors, not 1. A vet failure
+  records `build_ok`, and `summary.md` counts the go runs that failed vet alone
+  (the build passed). The hidden cases then run the binary. A `panic:` is
+  `failure: runtime`, code `panic`, and a `fatal error:` (a deadlock) code
+  `fatal`. Go rows have no `type_escapes` (`-` in `summary.md`).
+- Starts: `start.go` keeps the bugs of `start.py` and has `//go:build ignore`,
+  so `go build .` leaves it out. The t2 and t5 starts do not compile, like the
+  typed starts; the other starts give the output of `start.py` on the hidden
+  cases, and `--check-starts` checks that they grade alike.
+
+What is not equal to the other arms:
+
+- The commands name the file (`go vet solution.go`), not the package: the
+  workspace also holds `start.go`, which is package `main` too.
+- `task.md` names `solution.agc` and `solution.py` only; the prompt names
+  `solution.go`. Some tasks ask for an Agentica or Python type: a `Command[T]`
+  enum with exhaustive `case` (t8, t13) or a `Result[Int]` / `int | None` (t14).
+  Go has no sum types or exhaustive switch, so the reference uses an interface
+  with a type switch and `(int, bool)`, and nothing checks a missing case.
+- t13 asks for a new variant handled everywhere (`assert_never` in Python, an
+  exhaustive `case` in Agentica). The Go start uses type switches with a
+  `panic` default, so a missing case is a runtime failure, not a check failure.
+- t2 prints floats as Python does (`5.0`, `0.25`); Go has no such format, so
+  the Go reference formats them by hand.
+- The task text of t17, t18 and t20 names `sys.argv`, `System.args()` and the
+  Python or Agentica HTTP modules; the Go prompt adds that these are `os.Args`
+  and `net/http`.
+- Go is strict where the other checkers are not: an unused variable or import
+  is a compile error, so a draft fails more checks. `go vet` also runs analyses
+  that are not type checks (`printf` formats, copied locks, unreachable code),
+  which mypy and `agentica check` do not have.
+- The check is two commands, each with the 90-second checker limit, where the
+  other arms have one.
+- The arm runs in Docker only. The Firejail sandbox refuses it. For `go run`
+  the `/tmp` tmpfs of every container is now mounted `exec` with 256 MB; rounds
+  before the Go arm had it `noexec`.
+- The image is `linux/amd64` only (the Go archive is), and the Dockerfile needs
+  BuildKit (`ADD --checksum`).
+
 ### Spend and fix rounds
 
 Every row and `summary.md` have two more figures; `summary.md` also totals
-them per arm.
+them per arm, over the tasks every arm ran (the go arm skips a task without Go
+files), and lists the tasks of each arm.
 
 - `cost` (the `spend $` column) is the cost Pi reports, `cost_source: agent`.
   When Pi reports 0 for a run that used tokens, the runner prices the tokens
