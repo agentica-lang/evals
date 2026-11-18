@@ -350,7 +350,9 @@ class PrepareTests(unittest.TestCase):
         self.assertEqual(available, ["t1-stats", "t2-fix-types", "t3-struct-change", "t4-word-count",
                                      "t5-scope-return", "t6-json-catalog", "t7-json-stream", "t8-enum-ledger",
                                      "t9-inventory-orders", "t10-calc-extend", "t11-gradebook",
-                                     "t12-member-ids", "t13-transfer-variant", "t14-price-lookup"])
+                                     "t12-member-ids", "t13-transfer-variant", "t14-price-lookup",
+                                     "t15-robust-ledger", "t16-robust-csv", "t17-quote-client",
+                                     "t18-stats-server", "t19-orders-report", "t20-big-log"])
 
     def test_a_go_note_is_added_to_the_task_of_the_go_arm_only(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

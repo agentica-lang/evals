@@ -25,6 +25,8 @@ quoting: a comma always separates fields.
    between double quotes.
 5. The salary is not negative. Otherwise `negative salary`.
 
+Salaries and department totals fit in a signed 64-bit integer.
+
 For a bad row the program prints `line N: <problem>` at once, where `N` is the
 line number in the input (the header is line 1, and blank lines count), and the
 row is left out of the summary. The program goes on with the next line. After
