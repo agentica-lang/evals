@@ -59,6 +59,7 @@ alone (see "The ecosystem tasks").
 |---|---|---|
 | `t21-notes-api` | build on packages | a JSON API for notes on SQLite, from a start that answers `/health` only |
 | `t22-orders-api` | repair on packages | an orders API with a wrong status, SQL built from text, wrong totals, order and checks |
+| `t23-todo-priority` | schema change on packages | add a `priority` column to a live database made by the old version, and a filter |
 
 The arms are the context an agent gets:
 
