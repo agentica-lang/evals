@@ -4,6 +4,7 @@ import hashlib
 import io
 import json
 import os
+import time
 import random
 import shutil
 import subprocess
@@ -1887,15 +1888,24 @@ class DockerGradingTests(unittest.TestCase):
                 (hidden / f"{name}.out").write_text(expected + "\n", encoding="utf-8")
             args = Namespace(sandbox="docker", image=run.DEFAULT_IMAGE, chroot_root=None)
             results = {}
+            copy = shutil.copyfile
+
+            def keep_time(source: Path, target: Path) -> object:
+                copied = copy(source, target)
+                shutil.copystat(source, target)
+                return copied
+
             for arm, files in (("typed-python", python), ("python", python), ("go", go),
                                ("typed-python-bad", {**python, "calc/double.py": "def double(n: int) -> str:\n    return n\n"})):
                 work = root / arm
                 for name, text in files.items():
                     (work / name).parent.mkdir(parents=True, exist_ok=True)
                     (work / name).write_text(text, encoding="utf-8")
+                    # Old files, kept old in the copy: Go indexes a folder whose files are older than two seconds.
+                    os.utime(work / name, (time.time() - 3600, time.time() - 3600))
                 scratch = root / f"{arm}-scratch"
                 scratch.mkdir()
-                with patch.object(run, "TASKS", root / "tasks"):
+                with patch.object(run, "TASKS", root / "tasks"), patch.object(run.shutil, "copyfile", keep_time):
                     solution = work / f"solution.{run.ARMS[arm.removesuffix('-bad')]}"
                     results[arm] = run.grade(solution, "tree", arm.removesuffix("-bad"), args, scratch, arm)
 
