@@ -334,6 +334,22 @@ class PrepareTests(unittest.TestCase):
             with self.subTest(task=task.name):
                 self.assertEqual((task / "start.go").is_file(), (task / "start.py").is_file())
 
+    def test_a_round_where_every_task_is_skipped_stops_with_a_message(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            (Path(directory) / "t10").mkdir()
+            with (patch("sys.argv", ["run.py", "--agent", "reference", "--arms", "go", "--tasks", "t10"]),
+                  patch.object(run, "TASKS", Path(directory)), contextlib.redirect_stdout(io.StringIO()),
+                  self.assertRaises(SystemExit) as raised):
+                run.main()
+        self.assertIn("nothing to run", str(raised.exception))
+
+    def test_the_tasks_available_in_go(self) -> None:
+        # Each part of the Go arm adds its tasks here.
+        available = sorted(task.name for task in run.TASKS.iterdir() if (task / "reference.go").is_file())
+        self.assertEqual(available, ["t1-stats", "t2-fix-types", "t3-struct-change", "t4-word-count",
+                                     "t5-scope-return", "t6-json-catalog", "t7-json-stream", "t8-enum-ledger",
+                                     "t9-inventory-orders"])
+
     def test_a_task_without_go_files_is_skipped_by_the_go_arm_only(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             tasks = Path(directory)
@@ -682,24 +698,30 @@ class MetricsTests(unittest.TestCase):
                 new = run.pi_metrics("\n".join(events))
                 self.assertEqual({key: new[key] for key in LEGACY_KEYS}, legacy_pi_metrics("\n".join(events)))
 
-    def test_a_go_vet_and_the_go_build_after_it_are_one_check(self) -> None:
+    def test_a_go_vet_and_a_go_build_next_to_each_other_in_either_order_are_one_check(self) -> None:
         vet_error = "# command-line-arguments\nvet: ./solution.go:3:5: undefined: x"
         build_error = "# command-line-arguments\n./solution.go:3:5: undefined: x"
+        vet, build = "go vet solution.go", "go build solution.go"
+        # (interpreter_runs, check_runs, check_failures, failing_runs)
         rows = {
-            "both pass": ([("go vet solution.go", "ok"), ("go build solution.go", "")], (1, 0, 0)),
-            "one command": ([("go vet solution.go && go build solution.go", vet_error)], (1, 1, 1)),
-            "vet fails": ([("go vet solution.go", vet_error), ("go build solution.go", build_error)], (1, 1, 1)),
-            "build fails": ([("go vet solution.go", ""), ("go build solution.go", build_error)], (1, 1, 1)),
-            "edit between": ([("go vet solution.go", vet_error), ("sed -i s/x/y/ solution.go", ""),
-                              ("go build solution.go", build_error)], (2, 2, 2)),
+            "both pass": ([(vet, "ok"), (build, "")], (1, 1, 0, 0)),
+            "build first": ([(build, ""), (vet, "")], (1, 1, 0, 0)),
+            "one command": ([(f"{vet} && {build}", vet_error)], (1, 1, 1, 1)),
+            "vet fails": ([(vet, vet_error), (build, build_error)], (1, 1, 1, 1)),
+            "build fails": ([(vet, ""), (build, build_error)], (1, 1, 1, 1)),
+            "build first fails": ([(build, build_error), (vet, vet_error)], (1, 1, 1, 1)),
+            "vet fails after build": ([(build, ""), (vet, vet_error)], (1, 1, 1, 1)),
+            "two vets": ([(vet, ""), (vet, "")], (2, 2, 0, 0)),
+            "edit between": ([(vet, vet_error), ("sed -i s/x/y/ solution.go", ""), (build, build_error)],
+                             (2, 2, 2, 2)),
         }
         for name, (calls, expected) in rows.items():
             events = [line for number, (command, output) in enumerate(calls)
                       for line in bash_events(str(number), command, output)]
             metrics = run.pi_metrics("\n".join(events))
             with self.subTest(name=name):
-                self.assertEqual((metrics["check_runs"], metrics["check_failures"], metrics["failing_runs"]),
-                                 expected)
+                self.assertEqual((metrics["interpreter_runs"], metrics["check_runs"], metrics["check_failures"],
+                                  metrics["failing_runs"]), expected)
 
     def test_a_built_program_is_a_run_and_its_panic_a_failing_run(self) -> None:
         events = (bash_events("1", "go build -o /tmp/s solution.go", "")
@@ -713,7 +735,8 @@ class MetricsTests(unittest.TestCase):
 
     def test_go_downloads_are_net_commands(self) -> None:
         for command in ("go get golang.org/x/text", "go install example.com/x@latest", "go mod download",
-                        "GOPROXY=https://proxy.golang.org go build", "go -C w get x"):
+                        "GOPROXY=https://proxy.golang.org go build", "go -C w get x", "go mod tidy",
+                        "go -C w mod tidy", "go run example.com/tool@v1.2.0 x", "go run example.com/tool@latest"):
             with self.subTest(command=command):
                 self.assertTrue(run.is_net_command(command))
         self.assertFalse(run.is_net_command("go build solution.go"))
@@ -780,24 +803,37 @@ class GoCheckTests(unittest.TestCase):
         self.steps = steps
         return found
 
-    def test_vet_then_build_and_the_first_failure_is_the_row(self) -> None:
+    # Captured from go 1.27.4 in the image.
+    VET_SYNTAX = ("# command-line-arguments\n# [command-line-arguments]\nvet: ./solution.go:6:15: missing ',' before "
+                  "newline in argument list (and 1 more errors)\n")
+    BUILD_SYNTAX = ("# command-line-arguments\n./solution.go:6:15: syntax error: unexpected newline in argument list; "
+                    "possibly missing comma or )\n")
+    VET_TYPE = ("# command-line-arguments\n# [command-line-arguments]\nvet: ./solution.go:5:17: cannot use 2 (untyped "
+                "int constant) as string value in variable declaration\n")
+    BUILD_TYPE = ("# command-line-arguments\n./solution.go:4:2: declared and not used: x\n./solution.go:5:6: declared "
+                  "and not used: y\n./solution.go:5:17: cannot use 2 (untyped int constant) as string value in "
+                  "variable declaration\n")
+    VET_PRINTF = "# command-line-arguments\n./solution.go:9:2: fmt.Printf format %s has arg n of wrong type int\n"
+
+    def test_vet_then_build_and_the_class_and_count_of_a_type_or_syntax_error_come_from_the_build(self) -> None:
         self.assertIsNone(self.check(("", "", 0)))
         self.assertEqual(self.steps, [run.GO_VET, run.GO_BUILD])
-        vet = self.check(("", "./solution.go:9:2: fmt.Printf format %s has arg n of wrong type int\n", 1))
-        self.assertEqual(self.steps, [run.GO_VET])
-        build = self.check(("", "", 0), ("", "# command-line-arguments\n./solution.go:3:5: x declared and not used\n"
-                                         "./solution.go:4:5: y declared and not used\n", 1))
-        syntax = self.check(("", "./solution.go:3:1: syntax error: unexpected }\n", 1))
-        typed = self.check(("", "# command-line-arguments\nvet: ./solution.go:11:9: invalid operation\n", 1),
-                           ("", "# command-line-arguments\n" + "./solution.go:11:9: invalid operation\n" * 6, 1))
-        self.assertEqual(self.steps, [run.GO_VET, run.GO_BUILD])
-        self.assertEqual((typed["code"], typed["check_errors"]), ("vet", 6))
+        printf = self.check(("", self.VET_PRINTF, 1))
+        build = self.check(("", "", 0), ("", self.BUILD_TYPE, 1))
+        syntax = self.check(("", self.VET_SYNTAX, 1), ("", self.BUILD_SYNTAX, 1))
+        typed = self.check(("", self.VET_TYPE, 1), ("", self.BUILD_TYPE, 1))
         slow = self.check((None, "timeout", None))
+        slow_build = self.check(("", "", 0), (None, "timeout", None))
 
-        self.assertEqual((vet["failure"], vet["code"], vet["check_errors"], vet["passed"]), ("check", "vet", 1, 0))
-        self.assertEqual((build["failure"], build["code"], build["check_errors"]), ("check", "build", 2))
-        self.assertEqual((syntax["failure"], syntax["code"]), ("syntax", "syntax"))
+        self.assertEqual(self.steps, [run.GO_VET, run.GO_BUILD])
+        self.assertEqual((printf["failure"], printf["code"], printf["check_errors"], printf["build_ok"]),
+                         ("check", "vet", 1, True))
+        self.assertEqual((build["failure"], build["code"], build["check_errors"]), ("check", "build", 3))
+        self.assertEqual((syntax["failure"], syntax["code"], syntax["check_errors"], syntax["build_ok"]),
+                         ("syntax", "syntax", 1, False))
+        self.assertEqual((typed["failure"], typed["code"], typed["check_errors"]), ("check", "vet", 3))
         self.assertEqual((slow["failure"], slow["code"]), ("check-timeout", "vet"))
+        self.assertEqual((slow_build["failure"], slow_build["code"]), ("check-timeout", "build"))
 
     def test_go_cases_run_the_built_binary(self) -> None:
         self.assertEqual(run.case_invocation("go", None, "1\n"), (["/workspace/solution"], "1\n"))
@@ -805,6 +841,9 @@ class GoCheckTests(unittest.TestCase):
                          (["python3", "-I", "-", "1\n", "/workspace/solution"], "driver"))
         self.assertEqual(run.classify("panic: index out of range\n", "go"), ("runtime", "panic"))
         self.assertEqual(run.classify("", "go"), ("logic", None))
+        self.assertEqual(run.classify("fatal error: all goroutines are asleep - deadlock!\n", "go"),
+                         ("runtime", "fatal"))
+        self.assertTrue(run.command_failed("./solution", "fatal error: all goroutines are asleep - deadlock!", True))
 
 
 class CheckerGradingTests(unittest.TestCase):
@@ -1328,7 +1367,20 @@ class SummaryTests(unittest.TestCase):
 
         self.assertIn("| t2 | skill | 1 | 1/1 | 100% | 0 | - | 0.7500 | - | - | - | 1.0 | 0.0 | 2.0 |", summary)
         self.assertIn("| typed-python | 1 | 0/1 | 0.5000 | 0.5000 | 0.00 | agent 1 |", summary)
-        self.assertIn("| skill | 2 | 2/2 | 1.0000 | 0.5000 | 1.50 | agent 1, table 1 |", summary)
+        self.assertIn("| skill | 1 | 1/1 | 0.2500 | 0.2500 | 1.00 | agent 1 |", summary)
+        self.assertIn("Totals over the 1 tasks every arm ran:", summary)
+        self.assertIn("skill tasks: t1 t2", summary)
+        self.assertIn("typed-python tasks: t1", summary)
+
+    def test_go_rows_show_no_type_escapes_and_count_vet_only_failures(self) -> None:
+        row = {"status": "fail", "passed": 0, "total": 1, "seconds": 1.0, "failure": "check", "code": "vet"}
+        rows = [dict(row, task="t1", arm="go", build_ok=True), dict(row, task="t2", arm="go", build_ok=False),
+                dict(row, task="t1", arm="typed-python", type_escapes=2)]
+        summary = summary_of(rows)
+
+        self.assertIn("| t1 | go | 1 | 0/1 | 0% | 0 | - | - | - | - | - | 1.0 | 0.0 | - | 0.0 | 0.0 | 0.0 | 0.0 | - |", summary)
+        self.assertIn("| t1 | typed-python | 1 | 0/1 | 0% | 0 | - | - | - | - | - | 1.0 | 0.0 | - | 0.0 | 0.0 | 0.0 | 0.0 | 2.0 |", summary)
+        self.assertIn("go runs that failed go vet alone (the build passed): 1 of 2", summary)
 
 
 class DockerBoundaryTests(unittest.TestCase):

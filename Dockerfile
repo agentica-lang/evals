@@ -1,5 +1,6 @@
-FROM debian:trixie-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2 AS go
 ARG GO_VERSION=1.27.4
+FROM debian:trixie-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2 AS go
+ARG GO_VERSION
 ARG GO_SHA256=7226736c2339719cda28fbf3a54d71aa63bcefe376e98cef00034268dab24840
 ADD --checksum=sha256:${GO_SHA256} https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz /go.tar.gz
 RUN tar -C /usr/local -xzf /go.tar.gz
@@ -24,13 +25,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* /root/.cache \
     && usermod --login agent --home /home/agent --move-home node
 
+ARG GO_VERSION
 COPY --from=go /usr/local/go /usr/local/go
 # The root file system is read-only at run time, so the build cache is warmed here for the whole public standard
 # library (`go list std` without internal, vendor and cmd): Go reads a read-only cache but cannot add to it, and a
 # package it has never indexed is then "not in std".
 ENV GOCACHE=/opt/go-cache GOPATH=/tmp/go GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local CGO_ENABLED=0
 RUN ln -s /usr/local/go/bin/go /usr/local/go/bin/gofmt /usr/local/bin/ \
-    && mkdir /opt/go-warm && cd /opt/go-warm && printf 'module warm\n\ngo 1.27\n' > go.mod \
+    && mkdir /opt/go-warm && cd /opt/go-warm && printf 'module warm\n\ngo %s\n' "${GO_VERSION%.*}" > go.mod \
     && { printf 'package main\n\nimport (\n'; \
          go list std | grep -vE '(^|/)(internal|vendor)(/|$)|^cmd/|^(runtime/cgo|runtime/race|plugin)$' \
            | sed 's/.*/\t_ "&"/'; \
