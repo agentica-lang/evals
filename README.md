@@ -128,6 +128,11 @@ versioned. Two options replace them:
 - `--agentica-src PATH`: an agentica checkout for the skill, `docs/grammar/`,
   `site/content/library/` and `examples/`.
 
+Only a round with an Agentica arm fetches them; a Python-only round needs no
+network for them. `run.json` records `agentica_version`, `agentica_commit`,
+`agentica_binary_sha256`, and whether `--agentica` or `--agentica-src` replaced
+the pins (`agentica_override`, `agentica_src_override`).
+
 To move to a new release, change `AGENTICA_VERSION`, `AGENTICA_ARCHIVE_SHA256`
 and `AGENTICA_COMMIT` together and run `--check-references`.
 

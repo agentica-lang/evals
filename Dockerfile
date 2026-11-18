@@ -1,4 +1,4 @@
-FROM node:22-trixie-slim
+FROM node:22-trixie-slim@sha256:68c76cfad89921b927eae28ba21407475e29d0ce450afcdbe70c1532db042b64
 
 ARG PI_VERSION=1.3.0
 ARG MYPY_VERSION=2.3.1
