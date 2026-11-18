@@ -1,0 +1,10 @@
+=== main.conf
+let who = "world"
+let n = 42
+let on = true
+greeting = "hello ${who}, ${n} ${on}!"
+escapes = "q\" b\\ n\n t\t d\$ ${who}"
+tabbed = "a	b"
+dollar = "cost $5 and $ {who}"
+unicode = "naïve ☃"
+control = "xy"

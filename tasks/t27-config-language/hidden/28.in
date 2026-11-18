@@ -1,0 +1,2 @@
+=== main.conf
+r = { let k = 1, k = 2, let k = 3 }

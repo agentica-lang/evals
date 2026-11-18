@@ -1,0 +1,11 @@
+=== main.conf
+import "a.conf" as a
+v = a.v
+=== a.conf
+import "b.conf" as b
+v = b.v
+=== b.conf
+import "lib/c.conf" as c
+v = 1
+=== lib/c.conf
+import "../a.conf" as a

@@ -1,0 +1,7 @@
+=== main.conf
+let a = {  = [1, { y = "z" }], w = -4 / 3 }
+v = a.x[1].y
+u}= a.w * 2 == -2
+s = "q" < "r" || 1 / 0 == 1
+=== lib.conf
+extra = [7]

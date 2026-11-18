@@ -37,11 +37,20 @@ targets a strength of Agentica.
 | Task | Kind | The agent does |
 |---|---|---|
 | `t25-fanout-deadlines` | concurrency | fetch URLs with a concurrency limit, request timeouts, hedged requests (the loser cancelled), retries with backoff and a deadline for the whole run |
+| `t27-config-language` | many error paths | an interpreter for a small configuration language (lexer, parser, name checker, evaluator, imports with cycle detection) that prints canonical JSON or the first error as a code at file:line:col |
 
 t25's driver is an HTTP backend that follows a script per URL (delays, hangs, a
 body a byte at a time, resets, status sequences). Its hygiene cases check the
 concurrency limit, that the run ends by the deadline, and that a hedge's loser
 is closed before its answer. `agent_timeout` gives it 2400 seconds.
+
+t27's cases are sets of files (`=== PATH` lines start each), which its driver
+writes to a folder before it runs the program on `main.conf`: valid programs,
+one or more cases per error code, nesting 300 deep, and an adversarial tier of
+programs with one to three random edits (seed 27). Its start gives every arm
+six of them under `cases/` and a runnable spec (`agentica test`, `unittest`,
+`go test`), so `spec runs` shows how often an arm runs it. It also has 2400
+seconds.
 
 The arms are the context an agent gets:
 
@@ -250,7 +259,9 @@ start. The prompt gives `go run solution.go` and the two checkers,
 `go vet solution.go` and `go build solution.go`, and says not to silence them.
 A task without a `reference.go` is not available in Go yet: the go arm skips
 it and prints a note, and `--check-references` grades go only on the tasks
-that have one.
+that have one. A tree task may get its references one language per change
+(Python first): until `reference/<ext>/` is there, every arm of that language
+skips it, and `--check-starts` compares the start trees it has.
 
 - Toolchain: Go 1.27.4, pinned with its SHA-256 in `Dockerfile`;
   `run.json` records `go env GOVERSION`, and the workspace `go.mod` takes its

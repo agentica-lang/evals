@@ -1,0 +1,5 @@
+=== main.conf
+import "x.conf" as x
+let x = 1
+=== x.conf
+v = 1

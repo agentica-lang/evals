@@ -1,0 +1,15 @@
+=== main.conf
+import "a.conf" as a
+import "b.conf" as b
+sum = a.v + b.v
+same = a.shared == b.shared
+=== a.conf
+import "shared.conf" as s
+v = 1
+shared = s
+=== b.conf
+import "shared.conf" as s
+v = 2
+shared = s
+=== shared.conf
+n = 1

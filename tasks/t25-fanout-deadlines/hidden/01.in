@@ -8,4 +8,5 @@ url f body:{"value":2.0}
 url g body:{"other":1,"value":12}
 url h body:[1]
 url i status:204
+url j body:{"value":null}
 check requests

@@ -8,10 +8,10 @@ from fetcher.job import Job
 LIMIT = 2**63
 
 
-async def attempt(url: str, job: Job, budget_ms: float) -> tuple[int, bytes] | None:
-    """One attempt: a request, a hedge after hedge_ms, the first response wins; None when every request failed."""
-    timeout = min(job.request_timeout_ms, budget_ms)
-    first = asyncio.create_task(get(url, max(1, int(timeout))))
+async def attempt(url: str, job: Job) -> tuple[int, bytes] | None:
+    """One attempt: a request, a hedge after hedge_ms, the first response wins; None when every request failed. The
+    run's deadline cancels it, so the requests are not cut short to fit the deadline."""
+    first = asyncio.create_task(get(url, job.request_timeout_ms))
     requests = [first]
     try:
         if job.hedge_ms > 0:
@@ -19,7 +19,7 @@ async def attempt(url: str, job: Job, budget_ms: float) -> tuple[int, bytes] | N
             if done and first.exception() is not None:
                 return None
             if not done:
-                requests.append(asyncio.create_task(get(url, max(1, int(min(job.request_timeout_ms, budget_ms - job.hedge_ms))))))
+                requests.append(asyncio.create_task(get(url, job.request_timeout_ms)))
         pending = set(requests)
         while pending:
             done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
@@ -51,7 +51,7 @@ def describe(answer: tuple[int, bytes] | None) -> str:
 async def fetch(url: str, job: Job, ends_at: float) -> str:
     backoff = job.backoff_ms
     for retry in range(job.retries + 1):
-        answer = await attempt(url, job, (ends_at - time.monotonic()) * 1000)
+        answer = await attempt(url, job)
         if answer is not None and not 500 <= answer[0] <= 599:
             break
         if retry < job.retries:

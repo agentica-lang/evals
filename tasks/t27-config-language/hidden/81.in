@@ -1,0 +1,4 @@
+=== main.conf
+let n = 2
+r = { let n = n + 1, v = n }
+let m = m

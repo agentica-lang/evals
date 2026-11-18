@@ -254,8 +254,49 @@ class SupplyChainTests(unittest.TestCase):
         self.assertEqual((unused["agentica_version"], unused["agentica_binary_sha256"]), (None, None))
 
 
-class FanoutFaultTests(unittest.TestCase):
-    """Each fault put into the t25 Python reference fails the cases meant to see it, and the reference passes them."""
+class FaultTests(unittest.TestCase):
+    """Each fault put into a task's Python reference fails the cases meant to see it, and the reference passes them.
+    A fault is (module under PACKAGE, the right text, the wrong text, the cases)."""
+
+    TASK, PACKAGE = "", ""
+    FAULTS: dict[str, tuple[str, str, str, list[str]]] = {}
+
+    def failing_cases(self, tree: Path, names: list[str]) -> list[str]:
+        hidden = run.TASKS / self.TASK / "hidden"
+        failing = []
+        for name in names:
+            case = hidden / f"{name}.in"
+            # Bytes, so a CRLF case keeps its CR.
+            done = subprocess.run([sys.executable, "-I", str(hidden / "driver.py"), case.read_bytes().decode("utf-8"),
+                                   sys.executable, "-B", "-s", "-E", str(tree / "solution.py")],
+                                  capture_output=True, text=True, timeout=120)
+            if done.stdout != case.with_suffix(".out").read_bytes().decode("utf-8"):
+                failing.append(name)
+        return failing
+
+    def test_every_fault_fails_its_cases(self) -> None:
+        if not self.TASK:
+            self.skipTest("the base of the fault tests")
+        reference = run.TASKS / self.TASK / "reference" / "py"
+        targets = sorted({name for *_, names in self.FAULTS.values() for name in names})
+        with tempfile.TemporaryDirectory() as directory:
+            tree = Path(directory) / "tree"
+            # No bytecode: a fault of the same size written in the same second would reuse a stale .pyc.
+            shutil.copytree(reference, tree, ignore=shutil.ignore_patterns("__pycache__"))
+            self.assertEqual(self.failing_cases(tree, targets), [])
+            for fault, (module, right, wrong, names) in self.FAULTS.items():
+                with self.subTest(fault=fault):
+                    source = (reference / self.PACKAGE / module).read_text(encoding="utf-8")
+                    self.assertEqual(source.count(right), 1)
+                    (tree / self.PACKAGE / module).write_text(source.replace(right, wrong), encoding="utf-8")
+                    self.assertEqual(self.failing_cases(tree, names), names)
+                    (tree / self.PACKAGE / module).write_text(source, encoding="utf-8")
+
+
+class FanoutFaultTests(FaultTests):
+    """t25: faults in the fetcher."""
+
+    TASK, PACKAGE = "t25-fanout-deadlines", "fetcher"
 
     FAULTS = {
         "no hedge": ("fetch.py", "if job.hedge_ms > 0:", "if False:", ["05", "hyg-03"]),
@@ -280,41 +321,34 @@ class FanoutFaultTests(unittest.TestCase):
         "a timeout on the head alone": ("client.py", "            status, headers = parse_head(head)\n",
                                         "            limit.reschedule(None)\n            status, headers = parse_head(head)\n",
                                         ["03"]),
-        "a redirect followed": ("fetch.py", "        answer = await attempt(url, job, (ends_at - time.monotonic()) * 1000)\n",
-                                "        answer = await attempt(url, job, (ends_at - time.monotonic()) * 1000)\n"
+        "a redirect followed": ("fetch.py", "        answer = await attempt(url, job)\n",
+                                "        answer = await attempt(url, job)\n"
                                 "        if answer is not None and 300 <= answer[0] <= 399:\n"
-                                "            answer = await attempt(url.rsplit('/', 1)[0] + '/redirected', job, 1000)\n",
+                                "            answer = await attempt(url.rsplit('/', 1)[0] + '/redirected', job)\n",
                                 ["adv-05"]),
         "no 64-bit bound": ("fetch.py", "or not -LIMIT <= value < LIMIT", "", ["adv-05"]),
     }
 
-    def failing_cases(self, tree: Path, names: list[str]) -> list[str]:
-        hidden = run.TASKS / "t25-fanout-deadlines" / "hidden"
-        failing = []
-        for name in names:
-            case = hidden / f"{name}.in"
-            done = subprocess.run([sys.executable, "-I", str(hidden / "driver.py"), case.read_text(encoding="utf-8"),
-                                   sys.executable, "-B", "-s", "-E", str(tree / "solution.py")],
-                                  capture_output=True, text=True, timeout=120)
-            if done.stdout != case.with_suffix(".out").read_text(encoding="utf-8"):
-                failing.append(name)
-        return failing
 
-    def test_every_fault_fails_its_cases(self) -> None:
-        reference = run.TASKS / "t25-fanout-deadlines" / "reference" / "py"
-        targets = sorted({name for *_, names in self.FAULTS.values() for name in names})
-        with tempfile.TemporaryDirectory() as directory:
-            tree = Path(directory) / "tree"
-            # No bytecode: a fault of the same size written in the same second would reuse a stale .pyc.
-            shutil.copytree(reference, tree, ignore=shutil.ignore_patterns("__pycache__"))
-            self.assertEqual(self.failing_cases(tree, targets), [])
-            for fault, (module, right, wrong, names) in self.FAULTS.items():
-                with self.subTest(fault=fault):
-                    source = (reference / "fetcher" / module).read_text(encoding="utf-8")
-                    self.assertEqual(source.count(right), 1)
-                    (tree / "fetcher" / module).write_text(source.replace(right, wrong), encoding="utf-8")
-                    self.assertEqual(self.failing_cases(tree, names), names)
-                    (tree / "fetcher" / module).write_text(source, encoding="utf-8")
+class ConfFaultTests(FaultTests):
+    """t27: faults in the stages of the interpreter."""
+
+    TASK, PACKAGE = "t27-config-language", "conf"
+    FAULTS = {
+        "the default recursion limit": ("../solution.py", "    sys.setrecursionlimit(20000)\n", "", ["76", "77", "78"]),
+        "newlines end a line in parentheses": ("parser.py", "            self.spaces.append(True)\n            inner",
+                                               "            self.spaces.append(False)\n            inner", ["04"]),
+        "chained comparisons": ("parser.py", "SINGLE = {2, 3}", "SINGLE: set[int] = set()", ["10", "69"]),
+        "no short circuit": ("evaluator.py", "        if left == (op == \"||\"):\n            return left\n", "",
+                             ["07", "42"]),
+        "no overflow check": ("evaluator.py", "    if not MIN_INT <= value <= MAX_INT:", "    if False:", ["33", "36"]),
+        "no cycle check": ("loader.py", "        if name in stack:", "        if False:", ["52", "54"]),
+        "keys in written order": ("output.py", "sorted(value, key=lambda key: key.encode())", "list(value)", ["01"]),
+        "a name bound before its value": ("checker.py", "        expr(statement.value, scopes)\n        if statement.is_let:\n"
+                                          "            scopes[-1].add(statement.name.text)\n",
+                                          "        if statement.is_let:\n            scopes[-1].add(statement.name.text)\n"
+                                          "        expr(statement.value, scopes)\n", ["81"]),
+    }
 
 
 class PrepareTests(unittest.TestCase):
@@ -498,20 +532,24 @@ class PrepareTests(unittest.TestCase):
         self.assertEqual(go_task, "Sample task.\n\nIn Go, return `(int, bool)`.\n")
         self.assertEqual(python_task, "Sample task.\n")
 
-    def test_a_task_without_go_files_is_skipped_by_the_go_arm_only(self) -> None:
+    def test_a_task_without_a_reference_in_an_arms_language_is_skipped_by_that_arm(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             tasks = Path(directory)
             for name in ("t1", "t2", "t3"):
                 (tasks / name).mkdir()
             (tasks / "t1" / "reference.go").write_text("package main\n")
             (tasks / "t3" / "reference.go").write_text("package main\n")
+            # A tree task whose Agentica reference has not come yet.
+            (tasks / "t4" / "reference" / "py").mkdir(parents=True)
             with patch.object(run, "TASKS", tasks), contextlib.redirect_stdout(io.StringIO()) as printed:
-                limited = run.limit_go_tasks(["python", "go"], ["t1", "t2", "t3"], {"python": ["t2"]})
-                untouched = run.limit_go_tasks(["python"], ["t1", "t2"], {})
+                limited = run.limit_arm_tasks(["python", "go"], ["t1", "t2", "t3"], {"python": ["t2"]})
+                untouched = run.limit_arm_tasks(["python"], ["t1", "t2"], {})
+                tree = run.limit_arm_tasks(["python", "skill"], ["t4"], {})
 
         self.assertEqual(limited, {"python": ["t2"], "go": ["t1", "t3"]})
         self.assertEqual(untouched, {})
-        self.assertIn("not available in Go yet (no reference.go), skipped: t2", printed.getvalue())
+        self.assertEqual(tree, {"skill": []})
+        self.assertIn("go: not available in go yet (no reference), skipped: t2", printed.getvalue())
         self.assertEqual(run.run_order(["t1", "t2", "t3"], ["python", "go"], limited, 1),
                          [("t1", "go", 1), ("t2", "python", 1), ("t3", "go", 1)])
 
@@ -1224,7 +1262,7 @@ class CaseCommandTests(unittest.TestCase):
         for task in sorted(path for path in run.TASKS.iterdir() if path.is_dir()):
             with self.subTest(task=task.name):
                 self.assertTrue((task / "task.md").is_file())
-                for ext in ("agc", "py"):
+                for ext in ("agc", "py", "go") if run.tree_task(task.name) else ("agc", "py"):
                     reference = (task / "reference" / ext / f"solution.{ext}" if run.tree_task(task.name)
                                  else task / f"reference.{ext}")
                     self.assertTrue(reference.is_file(), reference)

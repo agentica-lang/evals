@@ -93,7 +93,7 @@ func describe(a answer) string {
 	}
 	raw := bytes.TrimSpace(data["value"])
 	var value int64
-	if len(raw) == 0 || bytes.ContainsAny(raw, ".eE") || json.Unmarshal(raw, &value) != nil {
+	if len(raw) == 0 || string(raw) == "null" || bytes.ContainsAny(raw, ".eE") || json.Unmarshal(raw, &value) != nil {
 		return "error body"
 	}
 	return fmt.Sprintf("ok %d", value)
