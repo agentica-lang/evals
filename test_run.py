@@ -254,45 +254,6 @@ class SupplyChainTests(unittest.TestCase):
         self.assertEqual((unused["agentica_version"], unused["agentica_binary_sha256"]), (None, None))
 
 
-class TaskFaultTests(unittest.TestCase):
-    """Each fault of the t22 start, put back into the Python reference one at a time, fails a hidden case: the cases
-    see every fault the task asks to fix."""
-
-    FAULTS = {
-        "201 answered as 200": ("self.send_json(201, order(", "self.send_json(200, order("),
-        "a quantity of 0": ('whole(body.get("quantity"), 1)', 'whole(body.get("quantity"), 0)'),
-        "a decimal accepted": ("return type(value) is int and value >= least",
-                               "return isinstance(value, (int, float)) and not isinstance(value, bool) "
-                               "and value >= least"),
-        "SQL built from text": ('db.execute("select id from customers where name = ?", (body["customer"],))',
-                                "db.execute(f\"select id from customers where name = '{body['customer']}'\")"),
-        "totals without the quantity": ("sum(row[3] * row[4] for row in rows)", "sum(row[4] for row in rows)"),
-        "the report by name": ("order by total desc, c.name", "order by c.name"),
-    }
-
-    def failing_cases(self, source: str) -> list[str]:
-        task = run.TASKS / "t22-orders-api"
-        with tempfile.TemporaryDirectory() as directory:
-            program = Path(directory) / "solution.py"
-            program.write_text(source, encoding="utf-8")
-            failing = []
-            for case in sorted((task / "hidden").glob("*.in")):
-                done = subprocess.run([sys.executable, "-I", str(task / "hidden" / "driver.py"),
-                                       case.read_text(encoding="utf-8"), sys.executable, "-I", str(program)],
-                                      capture_output=True, text=True, timeout=120)
-                if done.stdout != case.with_suffix(".out").read_text(encoding="utf-8"):
-                    failing.append(case.stem)
-        return failing
-
-    def test_every_fault_of_the_t22_start_fails_a_case(self) -> None:
-        reference = (run.TASKS / "t22-orders-api" / "reference.py").read_text(encoding="utf-8")
-        self.assertEqual(self.failing_cases(reference), [])
-        for fault, (right, wrong) in self.FAULTS.items():
-            with self.subTest(fault=fault):
-                self.assertEqual(reference.count(right), 1)
-                self.assertNotEqual(self.failing_cases(reference.replace(right, wrong)), [])
-
-
 class FaultTests(unittest.TestCase):
     """Each fault put into a task's Python reference fails the cases meant to see it, and the reference passes them.
     A fault is (module under PACKAGE, the right text, the wrong text, the cases)."""
@@ -552,14 +513,7 @@ class PrepareTests(unittest.TestCase):
         # Each part of the Go arm adds its tasks here.
         available = sorted((task.name for task in run.TASKS.iterdir() if (task / "reference.go").is_file()),
                            key=lambda name: int(name[1:].split("-")[0]))
-        self.assertEqual(available, ["t1-stats", "t2-fix-types", "t3-struct-change", "t4-word-count",
-                                     "t5-scope-return", "t6-json-catalog", "t7-json-stream", "t8-enum-ledger",
-                                     "t9-inventory-orders", "t10-calc-extend", "t11-gradebook",
-                                     "t12-member-ids", "t13-transfer-variant", "t14-price-lookup",
-                                     "t15-robust-ledger", "t16-robust-csv", "t17-quote-client",
-                                     "t18-stats-server", "t19-orders-report", "t20-big-log",
-                                     "t21-notes-api", "t22-orders-api",
-                                     "t23-todo-priority"])
+        self.assertEqual(available, ["t8-enum-ledger", "t16-robust-csv", "t18-stats-server", "t21-notes-api"])
 
     def test_a_go_note_is_added_to_the_task_of_the_go_arm_only(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1024,8 +978,8 @@ class AgentTimeoutTests(unittest.TestCase):
             results, scratch = Path(tmp) / "results", Path(tmp) / "scratch"
             results.mkdir()
             scratch.mkdir()
-            row = run.one_run(args, results, scratch, "t1-stats", "typed-python", 1)
-            transcript = (results / "t1-stats-typed-python-1" / "agent.jsonl").read_text(encoding="utf-8")
+            row = run.one_run(args, results, scratch, "t8-enum-ledger", "typed-python", 1)
+            transcript = (results / "t8-enum-ledger-typed-python-1" / "agent.jsonl").read_text(encoding="utf-8")
             saved = json.loads((results / "results.jsonl").read_text(encoding="utf-8"))
         self.assertTrue(row["agent_timeout"])
         self.assertEqual((row["status"], row["failure"], row["passed"]), ("timeout", "agent-timeout", 6))
@@ -1448,7 +1402,7 @@ class MainTests(unittest.TestCase):
             root = Path(directory)
             (root / "dist" / "runtime" / "bin").mkdir(parents=True, exist_ok=True)
             (root / "dist" / "runtime" / "bin" / "agentica").write_text("binary")
-            argv = ["--check-references", "--agent", "pi", "--pass-env", "FOO", "--tasks", "t1-stats", "--image", "custom:1"]
+            argv = ["--check-references", "--agent", "pi", "--pass-env", "FOO", "--tasks", "t8-enum-ledger", "--image", "custom:1"]
 
             code, calls, validated = self.main(root, argv, "fail")
             failing = self.result_info(root)
@@ -1456,7 +1410,7 @@ class MainTests(unittest.TestCase):
             ok_code, _, _ = self.main(root, argv, "pass")
             shutil.rmtree(root / "eval")
             normal_code, normal_calls, normal_validated = self.main(
-                root, ["--agent", "pi", "--pass-env", "FOO", "--tasks", "t1-stats"], "pass")
+                root, ["--agent", "pi", "--pass-env", "FOO", "--tasks", "t8-enum-ledger"], "pass")
             normal = self.result_info(root)
 
         self.assertEqual((code, ok_code, normal_code), (1, 0, 0))
@@ -1844,7 +1798,7 @@ class DockerBoundaryTests(unittest.TestCase):
 
             with (patch.object(run, "agent_command", return_value=probe), patch.object(run, "AGENT_NETWORK", False),
                   patch.object(run.subprocess, "Popen", recording_popen)):
-                out, err, timed_out, _ = run.run_agent("pi", work, root, "t1-stats", "skill", None, 60, "docker", [],
+                out, err, timed_out, _ = run.run_agent("pi", work, root, "t8-enum-ledger", "skill", None, 60, "docker", [],
                                                     run.DEFAULT_IMAGE, auth)
             unchanged = json.loads(auth.read_text())["opencode-go"]["key"] == key
             left = list(work.iterdir())
@@ -1937,6 +1891,8 @@ class DockerGradingTests(unittest.TestCase):
                    'func main() {\n\tline, _ := bufio.NewReader(os.Stdin).ReadString(\'\\n\')\n'
                    '\tn, _ := strconv.Atoi(strings.TrimSpace(line))\n\tfmt.Println(n * 2)\n}\n')
         vet = 'package main\n\nimport "fmt"\n\nfunc main() {\n\tfmt.Printf("%s\\n", 6)\n}\n'
+        six = ('package main\n\nimport "fmt"\n\nfunc main() {\n\tvar a int = "x"\n\tvar b string = 1\n\tvar c bool = 2\n'
+               '\tvar d int = true\n\tvar e float64 = "y"\n\tvar f []int = 3\n\tfmt.Println(a, b, c, d, e, f)\n}\n')
         unused = 'package main\n\nimport "fmt"\n\nfunc main() {\n\tx := 1\n\tfmt.Println(6)\n}\n'
         # Packages outside the closure of the tasks' imports: the image warms the whole public std.
         wide = ('package main\n\nimport (\n\t"container/heap"\n\t"fmt"\n\t"html"\n\t"io/ioutil"\n\t"os"\n)\n\n'
@@ -1953,12 +1909,12 @@ class DockerGradingTests(unittest.TestCase):
             results = [self.grade(root, name, source, arm="go")
                        for name, source in (("go-ok", doubled), ("go-vet", vet), ("go-unused", unused),
                                             ("go-wide", wide),
-                                            ("go-t2-start", (run.TASKS / "t2-fix-types" / "start.go").read_text()))]
+                                            ("go-six-errors", six))]
 
         self.assertEqual([(r["status"], r["passed"], r["failure"], r["code"]) for r in results],
                          [("pass", 1, None, None), ("fail", 0, "check", "vet"), ("fail", 0, "check", "vet"),
                           ("pass", 1, None, None), ("fail", 0, "check", "vet")])
-        # go vet stops at the first type error of the t2 start; the build lists all six.
+        # go vet stops at the first type error; the build lists all six.
         self.assertEqual(results[-1]["check_errors"], 6)
 
     def test_a_tree_solution_grades_with_its_modules_and_counts_case_tiers(self) -> None:

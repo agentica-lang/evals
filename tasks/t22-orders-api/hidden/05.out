@@ -1,9 +1,0 @@
-GET /orders -> 405
-PUT /report -> 405
-POST /customers/ana/orders -> 405
-GET /nope -> 404 application/json {"error":"not found"}
-GET /customers/ana -> 404 application/json {"error":"not found"}
-GET /customers/ana/orders/1 -> 404 application/json {"error":"not found"}
-POST /orders -> 201 application/json {"cents":5,"customer":"Ana.B-c_1","id":1,"item":"\u2713 \u00fcn\u00ef","quantity":1}
-GET /customers/Ana.B-c_1/orders -> 200 application/json {"customer":"Ana.B-c_1","orders":[{"cents":5,"customer":"Ana.B-c_1","id":1,"item":"\u2713 \u00fcn\u00ef","quantity":1}],"total_cents":5}
-GET /report -> 200 application/json {"customers":[{"customer":"Ana.B-c_1","orders":1,"total_cents":5}]}

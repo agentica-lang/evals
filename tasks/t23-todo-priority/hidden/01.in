@@ -1,8 +1,0 @@
-GET /todos
-POST /todos {"title":"buy milk"}
-POST /todos {"title":"fix roof","priority":3}
-POST /todos {"title":"read","priority":1}
-GET /todos
-GET /todos?priority=3
-GET /todos?priority=2
-TABLE

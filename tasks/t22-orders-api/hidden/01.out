@@ -1,8 +1,0 @@
-POST /orders -> 201 application/json {"cents":150,"customer":"ana","id":1,"item":"pen","quantity":2}
-POST /orders -> 201 application/json {"cents":1000,"customer":"bo","id":2,"item":"ink","quantity":1}
-POST /orders -> 201 application/json {"cents":200,"customer":"ana","id":3,"item":"pad","quantity":3}
-GET /customers/ana/orders -> 200 application/json {"customer":"ana","orders":[{"cents":150,"customer":"ana","id":1,"item":"pen","quantity":2},{"cents":200,"customer":"ana","id":3,"item":"pad","quantity":3}],"total_cents":900}
-GET /customers/bo/orders -> 200 application/json {"customer":"bo","orders":[{"cents":1000,"customer":"bo","id":2,"item":"ink","quantity":1}],"total_cents":1000}
-GET /report -> 200 application/json {"customers":[{"customer":"bo","orders":1,"total_cents":1000},{"customer":"ana","orders":2,"total_cents":900}]}
-customers: [[1,"ana"],[2,"bo"]]
-orders: [[1,1,"pen",2,150],[2,2,"ink",1,1000],[3,1,"pad",3,200]]

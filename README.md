@@ -18,48 +18,17 @@ change the hidden cases.
 `run.py` runs the agents. `diagnostics.py` counts the
 diagnostics the agents saw in their logs.
 
-The first eight tasks are small programs on stdin and stdout.
-
-| Task | The agent writes |
-|---|---|
-| `t1-stats` | count, sum and max of integers from stdin |
-| `t2-fix-types` | fix the types in a price calculator |
-| `t3-struct-change` | add a field to a struct and update its uses |
-| `t4-word-count` | count words, ignoring case, in first-seen order |
-| `t5-scope-return` | fix scope and return errors in `classify` |
-| `t6-json-catalog` | filter a JSON catalog, validating all of it first |
-| `t7-json-stream` | answer JSON-lines requests, and go on after bad ones |
-| `t8-enum-ledger` | run a ledger of commands with enums and `case` |
-
-The twelve tasks t9 to t20 are the harder kinds of the 6c comparison (Agentica
-against typed Python), for the pilot. The start programs of t9, t10 and t12 are
-170 to 210 lines in both languages (`wc -l` of `start.agc` and `start.py`); the
-others are 28 to 132 lines. Their Go starts are 15 to 25% longer (200 to 231
-lines), mostly from explicit error returns.
+The suite keeps eight tasks (#15): four small ones from the first rounds and
+four larger ones (t24 to t27, coming one by one). The removed tasks (t1–t7,
+t9–t15, t17, t19, t20, t22, t23) are in git history; the ids are kept, so the
+numbers of earlier rounds still name the same tasks.
 
 | Task | Kind | The agent does |
 |---|---|---|
-| `t9-inventory-orders` | modify a program | add bulk discounts, `remove` and a `low` mark to a shop program |
-| `t10-calc-extend` | modify a program | add `%`, right-associative `^` and unary minus to a calculator |
-| `t11-gradebook` | modify a program | add weights, ranking with ties and letter grades; the data model changes |
-| `t12-member-ids` | type change | member and book ids from `Int` to `String` through the whole program |
-| `t13-transfer-variant` | type change | add an enum variant that every `case` (Python: `assert_never`) handles |
-| `t14-price-lookup` | type change | `find_price` returns `Result[Int]` (`int \| None`) instead of `-1`; four callers |
-| `t15-robust-ledger` | error handling | report `line N: problem`, skip the bad line, go on |
-| `t16-robust-csv` | error handling | the same for a CSV summary, with five checks in a fixed order |
-| `t17-quote-client` | repair an integration | an HTTP client with the wrong path, JSON shape and header |
+| `t8-enum-ledger` | small program | run a ledger of commands with enums and `case` |
+| `t16-robust-csv` | error handling | report `line N: problem` for a CSV summary, with five checks in a fixed order |
 | `t18-stats-server` | repair an integration | an `std/http` server with wrong JSON, status codes and port line |
-| `t19-orders-report` | repair an integration | a CSV to JSON pipeline with the wrong delimiter, header and path |
-| `t20-big-log` | streaming probe | slow errors of a log up to 29 MB; a whole-file read stops at 1 MiB, so stream (`File.each_line`, `File.read_line`) |
-
-The ecosystem tasks from t21 on build with packages, not the standard library
-alone (see "The ecosystem tasks").
-
-| Task | Kind | The agent does |
-|---|---|---|
-| `t21-notes-api` | build on packages | a JSON API for notes on SQLite, from a start that answers `/health` only |
-| `t22-orders-api` | repair on packages | an orders API with a wrong status, SQL built from text, wrong totals, order and checks |
-| `t23-todo-priority` | schema change on packages | add a `priority` column to a live database made by the old version, and a filter |
+| `t21-notes-api` | build on packages | a JSON API for notes on SQLite, from a start that answers `/health` only (see "The ecosystem tasks") |
 
 The larger tasks from t25 on (#15) are tree tasks (see "Tree tasks and case
 tiers"): solutions of several files, with adversarial and hygiene cases. Each
@@ -275,18 +244,16 @@ by weakening its options.
   `--agent pi` reports calls:
   `--agent claude` gives totals, so its interpreter, check and failing runs
   read 0, which means not measured.
-- Starts: `start.py` of t9 to t19 is typed and passes `mypy --strict`. For t2,
-  t3 and t5 (written for the untyped arm) `start.typed.py` is the same program
-  with annotations, and the typed arm gets it as `start.py`; for t2 and t5 it
-  fails the checker for the same reasons the Agentica start fails
-  `agentica check`.
+- Starts: `start.py` is typed and passes `mypy --strict`. A task written for
+  the untyped arm may have `start.typed.py`, the same program with
+  annotations, which the typed arm gets as `start.py`.
 - The untyped `python` arm stays for comparison with the early rounds. It is not
   part of the typed-Python pilot. Its workspace has no Agentica binaries.
 
 ### The Go arm
 
 The `go` arm writes `solution.go`, one `main` package with the standard library
-only (`net/http` for t17 and t18). The workspace has a `go.mod` (`module
+only (`net/http` for t18). The workspace has a `go.mod` (`module
 solution`, the Go version of the image), and `start.go` where the task has a
 start. The prompt gives `go run solution.go` and the two checkers,
 `go vet solution.go` and `go build solution.go`, and says not to silence them.
@@ -316,15 +283,14 @@ skips it, and `--check-starts` compares the start trees it has.
   runs. `go vet` type-checks first and stops at the first type or syntax error
   (its `vet: ` line; an unused variable is a type error, so its code is `vet`):
   then the class (`syntax error` gives `syntax`) and the count come from
-  `go build -gcflags=-e`, so the t2 start has 6 errors, not 1. A vet failure
+  `go build -gcflags=-e`, so a program with six type errors counts 6, not 1. A vet failure
   records `build_ok`, and `summary.md` counts the go runs that failed vet alone
   (the build passed). The hidden cases then run the binary. A `panic:` is
   `failure: runtime`, code `panic`, and a `fatal error:` (a deadlock) code
   `fatal`. Go rows have no `type_escapes` (`-` in `summary.md`).
 - Starts: `start.go` keeps the bugs of `start.py` and has `//go:build ignore`,
-  so `go build .` leaves it out. The t2 and t5 starts do not compile, like the
-  typed starts; the other starts give the output of `start.py` on the hidden
-  cases, and `--check-starts` checks that they grade alike.
+  so `go build .` leaves it out. A start gives the output of `start.py` on the
+  hidden cases, and `--check-starts` checks that they grade alike.
 
 What is not equal to the other arms:
 
@@ -332,19 +298,13 @@ What is not equal to the other arms:
   workspace also holds `start.go`, which is package `main` too.
 - `task.md` names `solution.agc` and `solution.py` only; the prompt names
   `solution.go`. Some tasks ask for an Agentica or Python type: a `Command[T]`
-  enum with exhaustive `case` (t8, t13) or a `Result[Int]` / `int | None` (t14).
-  Go has no sum types or exhaustive switch, so the reference uses an interface
-  with a type switch and `(int, bool)`, and nothing checks a missing case. A
-  task can add a `task.go.md`, which the go arm gets at the end of its
-  `task.md`: t14's says `(int, bool)` is the expected form.
-- t13 asks for a new variant handled everywhere (`assert_never` in Python, an
-  exhaustive `case` in Agentica). The Go start uses type switches with a
-  `panic` default, so a missing case is a runtime failure, not a check failure.
-- t2 prints floats as Python does (`5.0`, `0.25`); Go has no such format, so
-  the Go reference formats them by hand.
-- The task text of t17, t18 and t20 names `sys.argv`, `System.args()` and the
-  Python or Agentica HTTP modules; the Go prompt adds that these are `os.Args`
-  and `net/http`.
+  enum with exhaustive `case` (t8). Go has no sum types or exhaustive switch,
+  so the reference uses an interface with a type switch, and nothing checks a
+  missing case. A task can add a `task.go.md`, which the go arm gets at the
+  end of its `task.md`.
+- The task text of t18 names `sys.argv`, `System.args()` and the Python or
+  Agentica HTTP modules; the Go prompt adds that these are `os.Args` and
+  `net/http`.
 - Go is strict where the other checkers are not: an unused variable or import
   is a compile error, so a draft fails more checks. `go vet` also runs analyses
   that are not type checks (`printf` formats, copied locks, unreachable code),
@@ -357,14 +317,12 @@ What is not equal to the other arms:
 - The image is `linux/amd64` only (the Go archive is), and the Dockerfile needs
   BuildKit (`ADD --checksum`).
 - A crash exits 1 in Python and Agentica and 2 in Go (a `panic`). No rule
-  depends on it: a case passes only with exit 0 and the expected output, the
-  t17 and t19 drivers expect `--- exit 0` in every case, and the failure class
-  comes from stderr.
-- Known gaps, not fixed: for a non-ASCII name the t19 Python reference writes
-  `\u` escapes (`ensure_ascii`) where Go writes UTF-8, and no hidden case has
-  one; the t18 driver never sends some of the cases the task describes, so a
-  Go (or any) server can get them wrong and still pass. t16 states that
-  salaries and totals fit in 64 bits, as Agentica's `Int` and Go's `int` do.
+  depends on it: a case passes only with exit 0 and the expected output, and
+  the failure class comes from stderr.
+- Known gaps, not fixed: the t18 driver never sends some of the cases the task
+  describes, so a Go (or any) server can get them wrong and still pass. t16
+  states that salaries and totals fit in 64 bits, as Agentica's `Int` and Go's
+  `int` do.
 
 ### The ecosystem tasks
 
@@ -383,7 +341,7 @@ Each arm builds it with the libraries a developer would take:
   pages at the locked commit (it has no versioned `llms.txt`) are fetched with
   the packages and copied into the workspace as `docs/agentica-db/`. Not the
   site's root `llms.txt`: it links a Bond and agentica-db todo-API tutorial,
-  which is nearly t21 and t23.
+  which is nearly t21.
 - Python: the standard library, `http.server` and `sqlite3`, as
   agentica-lang/agentica#1843 allows; the image has no pip packages for it,
   and the prompt names no docs.
@@ -397,7 +355,7 @@ Each arm builds it with the libraries a developer would take:
   `database/sql`).
 
 The agent container has network, as for every task, so the agent can read the
-docs; the 20 offline tasks do not need it, and the grading stays offline. An
+docs; the offline tasks do not need it, and the grading stays offline. An
 Agentica arm that reads Bond's docs with `curl` counts in `net_commands` on
 these tasks. The
 hidden driver starts the service on a fresh database file, sends the requests,
@@ -480,21 +438,10 @@ this), and an agent can call `bin/agentica-real` or read the wrapper. A
 `query_runs` above `refused_queries` shows such a bypass. A refused call still
 costs the agent a turn; read `refused_queries` with that in mind.
 
-The arm runs on the tasks that cross a program: a change that follows a type
-through many uses, where `refs` and `type-at` should help. Proposed subset, from
-the task statements (the start programs are 100 to 194 lines):
-
-| Task | Why it crosses the program |
-|---|---|
-| `t9-inventory-orders` | new fields and a new command through six commands |
-| `t11-gradebook` | the data model changes (weights, ranks, grades) |
-| `t12-member-ids` | the id type changes through structs, maps, sorting, parsing |
-| `t13-transfer-variant` | a new enum variant that every `case` must handle |
-| `t14-price-lookup` | a plain value becomes a `Result[Int]` in four callers |
-
-Left out: t3 (a 19-line start, one field), t10 (new operators, not a type
-change), and the small programs, where reading the file costs less than a query.
-With 3 reps, that is 15 extra runs per model.
+The arm ran on the tasks that cross a program (t9, t11 to t14), a change that
+follows a type through many uses, where `refs` and `type-at` should help. Those
+tasks were removed with the eight-task suite (#15), so the arm has no subset
+now.
 
 ### The full 6c round
 
@@ -564,25 +511,10 @@ two optional files, which the integration and big-data tasks use:
   in no file and in no `/proc/*/cmdline`; the harness does not defend against a
   solution that reads the memory of its parent process. The case content is in
   the command line, and a plain case gives it to the solution as its input
-  anyway. The drivers: t17 is an HTTP server (`http.server`) that checks the
-  request and prints the requests it got; t18 starts the solution as a server,
-  reads its `listening PORT` line and calls it with `http.client`; t19 writes
-  the CSV, runs the program with relative paths and prints the file it wrote;
-  t20 generates a log and checks the answer itself.
+  anyway. The drivers: t18 starts the solution as a server, reads its
+  `listening PORT` line and calls it with `http.client`; t21 does the same on a
+  fresh database; t25 and t27 are described with their tasks.
 - `hidden/timeout` is the time limit of one case in seconds (the default is 10).
-  t20 has 60.
-
-t20 generates its logs (a fixed pseudo-random sequence, 50,000 and 600,000
-lines, with invalid, blank, CRLF and 3,000-character lines), so the repository
-holds no big file. The harness does not limit the memory of the solution, and
-the task statement gives no memory limit; it tells every arm the same thing: do
-not read the whole file into memory, process it line by line, and no line is
-longer than 4000 bytes (the longest generated line is 3,056 bytes). The measure
-is whether the agent streams: in Agentica a whole-file read of more than 1 MiB
-fails, and in Python it is allowed and passes. Report t20 apart from the
-cross-arm aggregate, as a streaming probe: it shows whether an agent finds the
-streaming calls of its language, not how well it programs in general, and a
-Python solution that ignores the instruction still passes.
 
 ### Tree tasks and case tiers
 
@@ -676,8 +608,8 @@ the spend per passing run.
 - Do not merge anything or change the skill while a round runs.
 - If `/tmp` is a small `tmpfs`, point `TMPDIR` at a directory on disk before you
   start the runner. Each run copies the runtime bundle (about 580 MB) into a
-  temporary directory, and t20 writes big logs there, so four runs at a time can
-  fill a 6 GB `/tmp` and stop the round with `No space left on device`.
+  temporary directory, so many runs at a time can fill a small `/tmp` and stop
+  the round with `No space left on device`.
 
 ## Results
 
