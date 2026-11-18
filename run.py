@@ -1695,9 +1695,12 @@ def start_outcome(args: argparse.Namespace, scratch: Path, task: str, arm: str) 
 
 def check_starts(args: argparse.Namespace) -> int:
     """Each start.go must grade like the typed Python start: the same status, passed cases and failure kind. A tree
-    task's start trees (start/<ext>/) must grade alike in all three languages."""
-    tasks = [task for task in args.tasks if (TASKS / task / "start.go").is_file() or (TASKS / task / "start" / "go").is_dir()]
-    arms = {task: ("typed-python", "go", "binary") if tree_task(task) else ("typed-python", "go") for task in tasks}
+    task's start trees (start/<ext>/) must grade alike in the languages it has so far."""
+    tree_arms = {"py": "typed-python", "go": "go", "agc": "binary"}
+    arms = {task: tuple(arm for ext, arm in tree_arms.items() if (TASKS / task / "start" / ext).is_dir())
+            if tree_task(task) else ("typed-python", "go") for task in args.tasks
+            if (TASKS / task / "start.go").is_file() or tree_task(task)}
+    tasks = [task for task, found in arms.items() if len(found) > 1]
     with tempfile.TemporaryDirectory(prefix="agentica-eval-starts-") as directory, \
             ThreadPoolExecutor(max_workers=args.jobs) as pool:
         scratch = Path(directory)
@@ -1858,16 +1861,19 @@ def parse_arm_tasks(specs: list[str], arms: list[str], tasks: list[str]) -> dict
     return chosen
 
 
-def limit_go_tasks(arms: list[str], tasks: list[str], arm_tasks: dict[str, list[str]]) -> dict[str, list[str]]:
-    """A task without a reference.go is not available in Go yet: the go arm skips it, with a note."""
-    if "go" not in arms:
-        return arm_tasks
-    chosen = arm_tasks.get("go", tasks)
-    available = [task for task in chosen if has_reference(task, "go")]
-    skipped = [task for task in chosen if task not in available]
-    if skipped:
-        print(f"go: not available in Go yet (no reference.go), skipped: {' '.join(skipped)}", flush=True)
-    return {**arm_tasks, "go": available}
+def limit_arm_tasks(arms: list[str], tasks: list[str], arm_tasks: dict[str, list[str]]) -> dict[str, list[str]]:
+    """A task is not available in an arm's language yet without its reference there: the go arm skips a task without
+    a Go reference, and every arm a tree task whose reference/<ext>/ comes in a later change, with a note."""
+    limited = dict(arm_tasks)
+    for arm in arms:
+        chosen = arm_tasks.get(arm, tasks)
+        available = [task for task in chosen
+                     if has_reference(task, ARMS[arm]) or (arm != "go" and not tree_task(task))]
+        skipped = [task for task in chosen if task not in available]
+        if skipped:
+            print(f"{arm}: not available in {ARMS[arm]} yet (no reference), skipped: {' '.join(skipped)}", flush=True)
+            limited[arm] = available
+    return limited
 
 
 def main() -> int:
@@ -1926,7 +1932,7 @@ def main() -> int:
         trees = any(tree_task(task) and (TASKS / task / "start").is_dir() for task in args.tasks)
         args.arms = ["typed-python", "go", *(["binary"] if trees else [])]
     args.arms = args.arms or (REFERENCE_ARMS if args.check_references else DEFAULT_ARMS)
-    args.arm_tasks = limit_go_tasks(args.arms, args.tasks, parse_arm_tasks(args.arm_tasks, args.arms, args.tasks))
+    args.arm_tasks = limit_arm_tasks(args.arms, args.tasks, parse_arm_tasks(args.arm_tasks, args.arms, args.tasks))
     if not args.check_starts and not run_order(args.tasks, args.arms, args.arm_tasks, 1):
         raise SystemExit("nothing to run: every selected task is skipped by every selected arm "
                          "(the go arm runs only the tasks with a Go reference)")

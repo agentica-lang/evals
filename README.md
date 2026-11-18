@@ -292,7 +292,9 @@ start. The prompt gives `go run solution.go` and the two checkers,
 `go vet solution.go` and `go build solution.go`, and says not to silence them.
 A task without a `reference.go` is not available in Go yet: the go arm skips
 it and prints a note, and `--check-references` grades go only on the tasks
-that have one.
+that have one. A tree task may get its references one language per change
+(Python first): until `reference/<ext>/` is there, every arm of that language
+skips it, and `--check-starts` compares the start trees it has.
 
 - Toolchain: Go 1.27.4, pinned with its SHA-256 in `Dockerfile`;
   `run.json` records `go env GOVERSION`, and the workspace `go.mod` takes its

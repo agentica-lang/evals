@@ -577,20 +577,24 @@ class PrepareTests(unittest.TestCase):
         self.assertEqual(go_task, "Sample task.\n\nIn Go, return `(int, bool)`.\n")
         self.assertEqual(python_task, "Sample task.\n")
 
-    def test_a_task_without_go_files_is_skipped_by_the_go_arm_only(self) -> None:
+    def test_a_task_without_a_reference_in_an_arms_language_is_skipped_by_that_arm(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             tasks = Path(directory)
             for name in ("t1", "t2", "t3"):
                 (tasks / name).mkdir()
             (tasks / "t1" / "reference.go").write_text("package main\n")
             (tasks / "t3" / "reference.go").write_text("package main\n")
+            # A tree task whose Agentica reference has not come yet.
+            (tasks / "t4" / "reference" / "py").mkdir(parents=True)
             with patch.object(run, "TASKS", tasks), contextlib.redirect_stdout(io.StringIO()) as printed:
-                limited = run.limit_go_tasks(["python", "go"], ["t1", "t2", "t3"], {"python": ["t2"]})
-                untouched = run.limit_go_tasks(["python"], ["t1", "t2"], {})
+                limited = run.limit_arm_tasks(["python", "go"], ["t1", "t2", "t3"], {"python": ["t2"]})
+                untouched = run.limit_arm_tasks(["python"], ["t1", "t2"], {})
+                tree = run.limit_arm_tasks(["python", "skill"], ["t4"], {})
 
         self.assertEqual(limited, {"python": ["t2"], "go": ["t1", "t3"]})
         self.assertEqual(untouched, {})
-        self.assertIn("not available in Go yet (no reference.go), skipped: t2", printed.getvalue())
+        self.assertEqual(tree, {"skill": []})
+        self.assertIn("go: not available in go yet (no reference), skipped: t2", printed.getvalue())
         self.assertEqual(run.run_order(["t1", "t2", "t3"], ["python", "go"], limited, 1),
                          [("t1", "go", 1), ("t2", "python", 1), ("t3", "go", 1)])
 
@@ -1303,7 +1307,8 @@ class CaseCommandTests(unittest.TestCase):
         for task in sorted(path for path in run.TASKS.iterdir() if path.is_dir()):
             with self.subTest(task=task.name):
                 self.assertTrue((task / "task.md").is_file())
-                for ext in ("agc", "py"):
+                # A tree task's references may come one language per change; Python comes first.
+                for ext in ("py",) if run.tree_task(task.name) else ("agc", "py"):
                     reference = (task / "reference" / ext / f"solution.{ext}" if run.tree_task(task.name)
                                  else task / f"reference.{ext}")
                     self.assertTrue(reference.is_file(), reference)
