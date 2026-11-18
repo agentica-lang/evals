@@ -4,13 +4,18 @@ Can an agent write and repair Agentica programs? An agent gets one task, and its
 program is graded against hidden cases. The runs count passing cases, tokens,
 time, and interpreter and checker runs that failed.
 
-The tasks are in `tests/eval/tasks/`. Each has a `task.md`, a reference solution
+This repository holds the tasks, the runner and the results notes. It used to
+live in `tests/eval/` of
+[agentica-lang/agentica](https://github.com/agentica-lang/agentica), and its
+history came along.
+
+The tasks are in `tasks/`. Each has a `task.md`, a reference solution
 in Agentica (`reference.agc`) and in typed Python (`reference.py`), and hidden
 cases. The tasks that start from a program have `start.agc` and `start.py` (and
 `start.typed.py` when the typed arm needs a different start). A starter program
 can hold an intentional bug: when you edit a task, do not repair it and do not
 change the hidden cases.
-`tests/eval/run.py` runs the agents. `tests/eval/diagnostics.py` counts the
+`run.py` runs the agents. `diagnostics.py` counts the
 diagnostics the agents saw in their logs.
 
 The first eight tasks are small programs on stdin and stdout.
@@ -76,17 +81,17 @@ Pass a provider key by name with `--pass-env`.
 
 ```sh
 # Check the tasks: every reference solution must pass every hidden case (no model, no credentials)
-python3 tests/eval/run.py --check-references
+python3 run.py --check-references
 
 # A model run: 3 reps per task and arm
-python3 tests/eval/run.py --agent pi --model fireworks/accounts/fireworks/models/deepseek-v4p1-flash --pass-env FIREWORKS_API_KEY --arms skill typed-python --reps 3 --jobs 4
+python3 run.py --agent pi --model fireworks/accounts/fireworks/models/deepseek-v4p1-flash --pass-env FIREWORKS_API_KEY --arms skill typed-python --reps 3 --jobs 4
 
 # The same through OpenCode Go, with the key in a Pi auth file
-python3 tests/eval/run.py --agent pi --model opencode-go/deepseek-v4.1-flash --pi-auth tests/eval/.secrets/pi-auth.json --arms skill typed-python --reps 3 --jobs 2 --max-cost 2
+python3 run.py --agent pi --model opencode-go/deepseek-v4.1-flash --pi-auth .secrets/pi-auth.json --arms skill typed-python --reps 3 --jobs 2 --max-cost 2
 
 # Summarize a finished run, and count the diagnostics the agents saw
-python3 tests/eval/run.py --summarize tests/eval/results/<run directory>
-python3 tests/eval/diagnostics.py
+python3 run.py --summarize results/<run directory>
+python3 diagnostics.py
 ```
 
 `--tasks` picks tasks (the default is all twenty). `--arms` picks arms (the
@@ -97,21 +102,34 @@ the cost of the round (see "The budget cap"). `--sandbox firejail
 --chroot-root PATH` is the other sandbox; you prepare its rootfs yourself, and
 it needs `mypy` for the typed arm. Docker is the only sandbox tested with the
 typed arm, the drivers and the loopback peers; Firejail is untested for them.
-The results go to `tests/eval/results/`, which is not versioned. Each run
-directory has a `run.json` with the commit, the commit of the last change to the
-skill, the checker version, the Pi version, the model, the arms, and the image
+The results go to `results/`, which is not versioned. Each run directory has a
+`run.json` with the commit, the Agentica version and source commit, the checker
+version, the Pi version, the model, the arms, and the image
 name and ID, next to `results.jsonl` and `summary.md`. The runner has its own
-tests: `python3 -m unittest discover -s tests/eval -p 'test_*.py'`. These unit
-tests are not part of `make test` or CI.
+tests: `python3 -m unittest discover -p 'test_*.py'`. CI runs them and
+`--check-references` on every pull request (no model calls).
 
 `--check-references` is the same as `--agent reference` with the arms `binary`,
 `python` and `typed-python` (the three Agentica arms share one reference). It
 copies each `reference.*` as the solution, grades it like an agent's, prints the
-table, and exits 1 when a reference fails. `make eval-references` runs it with
-`--jobs 8`; it is not part of CI. Use it after any change to a task, the runner,
-the image or the VM. For the Agentica references it needs `dist/runtime` (the
-runner builds it unless you pass `--no-build`), which holds the `dist/agentica`
-binary.
+table, and exits 1 when a reference fails. Use it after any change to a task,
+the runner, the image or the Agentica version.
+
+### The Agentica under test
+
+By default a run uses Agentica 0.34.1: the `linux-x86_64` release archive,
+downloaded once into `.cache/` and checked against the SHA-256 pinned in
+`run.py`, and a sparse checkout of the commit of the `0.34.1` tag for the
+skill, the grammar, the library pages and the examples. `.cache/` is not
+versioned. Two options replace them:
+
+- `--agentica PATH`: another `agentica` binary built for Linux x86_64, such as
+  `dist/agentica` of an agentica checkout.
+- `--agentica-src PATH`: an agentica checkout for the skill, `docs/grammar/`,
+  `site/content/library/` and `examples/`.
+
+To move to a new release, change `AGENTICA_VERSION`, `AGENTICA_ARCHIVE_SHA256`
+and `AGENTICA_COMMIT` together and run `--check-references`.
 
 The Docker sandbox works like this:
 
@@ -125,7 +143,7 @@ The Docker sandbox works like this:
   `--pi-auth`.
 - `--pi-auth PATH` gives Pi a key in its `auth.json` format, such as
   `{"opencode-go": {"type": "api_key", "key": "..."}}`. The key file lives in
-  `tests/eval/.secrets/`, which git ignores; it is never in the image. The
+  `.secrets/`, which git ignores; it is never in the image. The
   container gets it read-only at `/run/pi-auth.json` and copies it to
   `~/.pi/agent/auth.json` on its tmpfs, because Pi locks that file in its own
   folder. Its strings of 8 characters or more are redacted from the agent log
@@ -137,18 +155,15 @@ The Docker sandbox works like this:
   after a round, and put one provider only in the file.
 - `TMPDIR` is `/tmp` in every container, because the root file system is
   read-only and the launcher writes its bytecode to the temporary directory. The
-  image has `libgc1` and `libssl3t64`, which `dist/agentica` links (the
-  default Linux build uses the system libraries).
-- `--no-build` reuses `dist/runtime`, the bundle that a normal run makes with
-  `make` and a copy of `dist/agentica` into its `bin/`. The runner exits when it
-  is missing.
+  image has `libgc1` and `libssl3t64`, which a `dist/agentica` built with the
+  system libraries links; the release binary needs only glibc.
 - `--agent claude` needs `--image` with the Claude CLI and Python. The default
   image has Pi only.
 
-If you change `tests/eval/Dockerfile`, remove the old image (`docker rmi
+If you change `Dockerfile`, remove the old image (`docker rmi
 agentica-eval:local`). The runner also rebuilds the default image by itself, and
 prints a line saying so, in two cases: `mypy --version` exits 126 or 127 in it
-(typed arm), or it cannot run a hello program with `dist/runtime/bin/agentica`
+(typed arm), or it cannot run a hello program with the agentica binary
 (any Agentica arm). Any other failure of the probes stops the run with a
 message, and an image given with `--image` is never rebuilt: the runner stops
 and asks you to rebuild it.
@@ -162,7 +177,7 @@ like the Agentica arms get `agentica check`. The prompt gives the command,
 by weakening its options.
 
 - Checker: mypy 2.3.1 (compiled), run with `--strict`. The version and its five
-  dependencies are pinned in `tests/eval/Dockerfile`; `run.json` records the
+  dependencies are pinned in `Dockerfile`; `run.json` records the
   version the image reports. mypy is the checker of this arm. It installs
   from PyPI as compiled wheels, with no download at run time; the `pyright`
   package on PyPI fetches its npm package on first use, which the grader (no
@@ -449,7 +464,7 @@ claims; the raw tables are in git history.
 
 ## Diagnostics
 
-`tests/eval/diagnostics.py` counts the codes the agents saw. In the `binary`
+`diagnostics.py` counts the codes the agents saw. In the `binary`
 rounds 5 to 8 the top codes were `PARSE-UNEXPECTED-TOKEN`, `CHECK-UNKNOWN-NAME`,
 `CHECK-TYPE-MISMATCH`, `CHECK-MISSING-RETURN` and `CHECK-UNKNOWN-METHOD`, mostly
 Python and Ruby habits, not logic errors (`len(s)`, `s.length`, `x.to_i`,

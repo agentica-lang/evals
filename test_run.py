@@ -1,4 +1,5 @@
 import contextlib
+import functools
 import io
 import json
 import os
@@ -143,19 +144,29 @@ class CandidateBoundaryTests(unittest.TestCase):
             self.assertEqual((outside_home / "agent" / "credentials").read_text(), "old credentials")
 
 
+@functools.cache
+def real_sources() -> Path:
+    """The pinned Agentica sources (fetched once into .cache)."""
+    return run.fetch_sources(run.AGENTICA_COMMIT)
+
+
+def real_skill() -> Path:
+    return real_sources() / ".agents" / "skills" / "agentica-programming"
+
+
 class PrepareTests(unittest.TestCase):
     def test_grammar_arm_writes_the_whole_specification(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "dist" / "runtime").mkdir(parents=True)
             (root / "examples").mkdir()
-            shutil.copytree(run.ROOT / "docs" / "grammar", root / "docs" / "grammar")
-            shutil.copytree(run.ROOT / "site" / "content" / "library", root / "site" / "content" / "library")
+            shutil.copytree(real_sources() / "docs" / "grammar", root / "docs" / "grammar")
+            shutil.copytree(real_sources() / "site" / "content" / "library", root / "site" / "content" / "library")
             task = root / "tasks" / "sample"
             task.mkdir(parents=True)
             (task / "task.md").write_text("Sample task.\n", encoding="utf-8")
             work = root / "work"
-            with patch.object(run, "ROOT", root), patch.object(run, "TASKS", root / "tasks"):
+            with patch.object(run, "ROOT", root), patch.object(run, "RUNTIME", root / "dist" / "runtime"), patch.object(run, "TASKS", root / "tasks"):
                 run.prepare(work, "sample", "grammar")
 
             grammar = (work / "docs" / "grammar.md").read_text(encoding="utf-8")
@@ -195,7 +206,7 @@ class PrepareTests(unittest.TestCase):
             (task / "start.py").write_text("untyped\n", encoding="utf-8")
             (task / "start.typed.py").write_text("typed\n", encoding="utf-8")
             (task / "start.agc").write_text("agentica\n", encoding="utf-8")
-            with patch.object(run, "ROOT", root), patch.object(run, "TASKS", root / "tasks"):
+            with patch.object(run, "ROOT", root), patch.object(run, "RUNTIME", root / "dist" / "runtime"), patch.object(run, "TASKS", root / "tasks"):
                 for arm, start, runtime in (("typed-python", "typed\n", False), ("python", "untyped\n", False),
                                             ("binary", "agentica\n", True)):
                     work = root / f"work-{arm}"
@@ -214,7 +225,7 @@ class PrepareTests(unittest.TestCase):
                 (tasks / name).mkdir(parents=True)
                 (tasks / name / "task.md").write_text("Sample task.\n", encoding="utf-8")
             (tasks / "plain" / "start.py").write_text("untyped\n", encoding="utf-8")
-            with patch.object(run, "ROOT", root), patch.object(run, "TASKS", tasks):
+            with patch.object(run, "ROOT", root), patch.object(run, "RUNTIME", root / "dist" / "runtime"), patch.object(run, "TASKS", tasks):
                 self.assertEqual(run.start_file("plain", "typed-python"), tasks / "plain" / "start.py")
                 run.prepare(root / "work-plain", "plain", "typed-python")
                 run.prepare(root / "work-nostart", "nostart", "typed-python")
@@ -225,6 +236,7 @@ class PrepareTests(unittest.TestCase):
 
 class NoCliArmTests(unittest.TestCase):
     def fake_runtime(self, root: Path) -> None:
+        shutil.copytree(real_skill(), root / ".agents" / "skills" / "agentica-programming")
         binary = root / "dist" / "runtime" / "bin" / "agentica"
         binary.parent.mkdir(parents=True)
         binary.write_text('#!/bin/sh\necho "real $*"\nexit 3\n')
@@ -236,7 +248,7 @@ class NoCliArmTests(unittest.TestCase):
     def prepare_in(self, root: Path, *arms: str) -> None:
         """Prepare work-ARM for each arm in a fake root with a fake runtime."""
         self.fake_runtime(root)
-        with patch.object(run, "ROOT", root), patch.object(run, "TASKS", root / "tasks"):
+        with patch.object(run, "ROOT", root), patch.object(run, "RUNTIME", root / "dist" / "runtime"), patch.object(run, "TASKS", root / "tasks"):
             for arm in arms:
                 run.prepare(root / f"work-{arm}", "sample", arm)
 
@@ -251,14 +263,14 @@ class NoCliArmTests(unittest.TestCase):
             self.assertTrue((skill / "SKILL.md").is_file())
             for path in skill.rglob("*.md"):
                 self.assertIsNone(run.QUERY_MENTION.search(path.read_text(encoding="utf-8")), path)
-            self.assertTrue((run.SKILL / "references" / "queries.md").is_file())
+            self.assertTrue((real_skill() / "references" / "queries.md").is_file())
             self.assertTrue((root / "work-skill" / "skills" / "agentica-programming" / "references" / "queries.md").is_file())
             self.assertIn("Use the agentica-programming skill.", run.prompt(root / "work-skill-nocli", "skill-nocli"))
 
     def test_a_skill_that_still_names_the_commands_stops_the_arm(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             skill = Path(directory) / "skill"
-            shutil.copytree(run.SKILL, skill)
+            shutil.copytree(real_skill(), skill)
             (skill / "references" / "files.md").write_text("Try `agentica refs NAME`.\n", encoding="utf-8")
             with self.assertRaises(SystemExit) as raised:
                 run.strip_query_docs(skill)
@@ -317,7 +329,7 @@ def legacy_pi_metrics(out: str) -> dict[str, int]:
         kind = event.get("type")
         if kind == "tool_execution_start":
             command = event.get("args", {}).get("command", "")
-            m["outside_reads"] += str(run.ROOT) in json.dumps(event.get("args", {}))
+            m["outside_reads"] += str(run.EVAL) in json.dumps(event.get("args", {}))
             m["net_commands"] += run.is_net_command(command)
             if event.get("toolName") == "bash":
                 m["query_runs"] += run.is_query_command(command)
@@ -742,8 +754,9 @@ class MainTests(unittest.TestCase):
             validated.append((image, typed, agentica))
             return {"checker": "mypy 9.9", "image_id": "sha256:feed", "pi": "1.3.0" if pi else None}
 
-        with (patch.object(run, "ROOT", root), patch.object(run, "EVAL", root / "eval"),
-              patch.object(run, "build") as build, patch.object(run, "require_docker"),
+        with (patch.object(run, "ROOT", root), patch.object(run, "RUNTIME", root / "dist" / "runtime"), patch.object(run, "EVAL", root / "eval"),
+              patch.object(run, "install_runtime") as build, patch.object(run, "use_sources"),
+              patch.object(run, "require_docker"),
               patch.object(run, "validate_docker", fake_validate), patch.object(run, "one_run", fake_one_run),
               patch.object(run, "run_preflight") as preflight,
               patch.dict(os.environ, {"FOO": "bar"}), patch("sys.argv", ["run.py", *argv]),
