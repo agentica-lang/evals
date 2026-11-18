@@ -402,7 +402,8 @@ class PrepareTests(unittest.TestCase):
                                      "t12-member-ids", "t13-transfer-variant", "t14-price-lookup",
                                      "t15-robust-ledger", "t16-robust-csv", "t17-quote-client",
                                      "t18-stats-server", "t19-orders-report", "t20-big-log",
-                                     "t21-notes-api", "t22-orders-api"])
+                                     "t21-notes-api", "t22-orders-api",
+                                     "t23-todo-priority"])
 
     def test_a_go_note_is_added_to_the_task_of_the_go_arm_only(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
