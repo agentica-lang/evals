@@ -13,7 +13,8 @@ uses the standard library (`http.server` and `sqlite3`).
 It takes one argument, the path of the SQLite database file. It listens on
 `127.0.0.1` with a port the system picks (port 0), prints one line,
 `listening PORT`, with the real port, flushes it, and serves requests until it
-is killed. Every request reads and writes the database.
+is killed. Every request reads and writes the database, and a change is
+committed before its answer is sent.
 
 Today it creates the table when it does not exist:
 

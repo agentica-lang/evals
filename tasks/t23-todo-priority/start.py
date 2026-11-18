@@ -28,7 +28,7 @@ class Handler(BaseHTTPRequestHandler):
         raw = self.rfile.read(length) if length else b""
         if path != "/todos":
             return self.send_json(404, {"error": "not found"})
-        with sqlite3.connect(self.database) as db:
+        with sqlite3.connect(self.database, isolation_level=None) as db:
             if method == "GET":
                 return self.list_todos(db)
             if method == "POST":
@@ -64,7 +64,7 @@ class Handler(BaseHTTPRequestHandler):
 
 def main() -> None:
     Handler.database = sys.argv[1]
-    with sqlite3.connect(Handler.database) as db:
+    with sqlite3.connect(Handler.database, isolation_level=None) as db:
         db.execute(SCHEMA)
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     print(f"listening {server.server_address[1]}", flush=True)
