@@ -1,0 +1,5 @@
+1 ok 2
+2 ok 3
+ok 2 of 2
+exit 0
+a slow request to /a was cancelled: yes

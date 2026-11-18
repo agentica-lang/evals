@@ -1,0 +1,5 @@
+1 error deadline
+2 ok 2
+ok 1 of 2
+exit 0
+requests: a=3 b=1

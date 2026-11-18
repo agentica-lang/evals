@@ -1,0 +1,5 @@
+job concurrency=4 request_timeout_ms=300 deadline_ms=4000 hedge_ms=0 retries=1 backoff_ms=100
+url a delay:1000:ok:1 ok:5
+url b hang hang
+url c drip:ok:1234567 ok:6
+check requests

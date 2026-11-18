@@ -1,0 +1,6 @@
+job concurrency=2 request_timeout_ms=500 deadline_ms=3000 hedge_ms=0 retries=1 backoff_ms=50
+url refused-a ok:1
+url b status:302
+url c body:{"value":100000000000000000000}
+url d body:{"value":9223372036854775807}
+url e body:{"value":true}
