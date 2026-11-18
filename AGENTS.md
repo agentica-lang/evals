@@ -16,6 +16,7 @@ ecosystem/          the pinned packages of the ecosystem tasks
 .cache/             the pinned Agentica release and sources (not versioned)
 .secrets/           provider auth files (never committed)
 results/            run output (never committed)
+bench/              the benchmark twins: run.py, measure.py, go/ (make bench)
 ```
 
 ## Commands
@@ -25,6 +26,8 @@ results/            run output (never committed)
   skipped when that fails (offline); the Docker tests need the image.
 - `python3 run.py --check-references`: every reference passes every hidden
   case; no model, no credentials.
+- `make bench-check`: the Go twins of `bench/go/` print what the pinned
+  Agentica programs and Python twins print; `make bench` times them.
 - `python3 run.py --agent pi --model M --pi-auth .secrets/pi-auth.json ...`: a
   model round. It costs money: only with the owner's OK.
 

@@ -23,7 +23,7 @@ jobs:
         uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
         with:
           path: .cache
-          key: agentica-${{ hashFiles('run.py', 'ecosystem/agentica.lock') }}
+          key: agentica-${{ hashFiles('run.py', 'bench/run.py', 'ecosystem/agentica.lock') }}
       - name: Build the evaluation image
         run: docker build --tag agentica-eval:local .
       - name: Unit tests
@@ -32,3 +32,5 @@ jobs:
         run: python3 run.py --check-references --jobs 4
       - name: Go starts grade like the Python starts (no model calls)
         run: python3 run.py --check-starts --jobs 4
+      - name: Benchmark twins print the same in Agentica, Python and Go
+        run: make bench-check
