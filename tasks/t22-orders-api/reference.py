@@ -52,7 +52,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json(404, {"error": "not found"})
         if method != wanted:
             return self.send_json(405, {"error": "method not allowed"})
-        with sqlite3.connect(self.database) as db:
+        with sqlite3.connect(self.database, isolation_level=None) as db:
             if path == "/orders":
                 return self.create(db, raw)
             if found:
@@ -102,7 +102,7 @@ class Handler(BaseHTTPRequestHandler):
 
 def main() -> None:
     Handler.database = sys.argv[1]
-    with sqlite3.connect(Handler.database) as db:
+    with sqlite3.connect(Handler.database, isolation_level=None) as db:
         for statement in SCHEMA:
             db.execute(statement)
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)

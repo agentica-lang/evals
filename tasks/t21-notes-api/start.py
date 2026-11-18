@@ -31,7 +31,7 @@ class Handler(BaseHTTPRequestHandler):
 
 def main() -> None:
     Handler.database = sys.argv[1]
-    with sqlite3.connect(Handler.database) as db:
+    with sqlite3.connect(Handler.database, isolation_level=None) as db:
         db.execute(SCHEMA)
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     print(f"listening {server.server_address[1]}", flush=True)

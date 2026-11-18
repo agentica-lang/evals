@@ -21,7 +21,8 @@ create table if not exists orders (id integer primary key, customer_id integer n
 It listens on `127.0.0.1` with a port the system picks (port 0), prints one
 line, `listening PORT`, with the real port, flushes it, and serves requests
 until it is killed. Every request reads and writes the database: other programs
-may change the tables while the service runs.
+may change the tables while the service runs. A change is committed before its
+answer is sent.
 
 ## The routes
 
