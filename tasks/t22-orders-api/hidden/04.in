@@ -1,0 +1,10 @@
+SQL insert into customers (id, name) values (5, 'ext')
+GET /customers/ext/orders
+GET /report
+SQL insert into orders (customer_id, item, quantity, cents) values (5, 'box', 3, 70)
+GET /customers/ext/orders
+POST /orders {"customer":"ext","item":"tape","quantity":2,"cents":30}
+RESTART
+GET /customers/ext/orders
+GET /report
+TABLE

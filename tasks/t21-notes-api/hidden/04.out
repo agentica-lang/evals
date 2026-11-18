@@ -1,0 +1,10 @@
+sql: ok
+GET /notes -> 200 application/json {"notes":[{"body":"sql","id":10,"title":"from outside"}]}
+GET /notes/10 -> 200 application/json {"body":"sql","id":10,"title":"from outside"}
+POST /notes -> 201 application/json {"body":"insert","id":11,"title":"after"}
+sql: ok
+GET /notes/10 -> 404 application/json {"error":"not found"}
+restarted
+GET /notes -> 200 application/json {"notes":[{"body":"insert","id":11,"title":"after"}]}
+POST /notes -> 201 application/json {"body":"restart","id":12,"title":"again"}
+table: [[11,"after","insert"],[12,"again","restart"]]

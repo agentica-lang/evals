@@ -1,0 +1,19 @@
+POST /todos -> 400 application/json {"error":"invalid todo"}
+POST /todos -> 400 application/json {"error":"invalid todo"}
+POST /todos -> 400 application/json {"error":"invalid todo"}
+POST /todos -> 400 application/json {"error":"invalid todo"}
+POST /todos -> 400 application/json {"error":"invalid todo"}
+POST /todos -> 400 application/json {"error":"invalid todo"}
+POST /todos -> 400 application/json {"error":"invalid todo"}
+POST /todos -> 400 application/json {"error":"invalid todo"}
+POST /todos -> 400 application/json {"error":"invalid todo"}
+POST /todos -> 400 application/json {"error":"invalid todo"}
+POST /todos -> 400 application/json {"error":"invalid todo"}
+POST /todos -> 400 application/json {"error":"invalid todo"}
+POST /todos -> 201 application/json {"id":1,"priority":1,"title":"ok"}
+GET /todos?priority= -> 400 application/json {"error":"invalid priority"}
+GET /todos?priority=x -> 400 application/json {"error":"invalid priority"}
+GET /todos?priority=0 -> 400 application/json {"error":"invalid priority"}
+GET /todos?priority=1&page=2 -> 200 application/json {"todos":[{"id":1,"priority":1,"title":"ok"}]}
+GET /todos?page=2 -> 200 application/json {"todos":[{"id":1,"priority":1,"title":"ok"}]}
+table: [[1,"ok",1]]

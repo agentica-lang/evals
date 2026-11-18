@@ -1,0 +1,8 @@
+POST /orders {"customer":"o'neil","item":"cap","quantity":2,"cents":500}
+GET /customers/o'neil/orders
+GET /customers/nobody/orders
+GET /customers/x'y/orders
+POST /orders {"customer":"zed","item":"cap","quantity":1,"cents":1000}
+POST /orders {"customer":"amy","item":"cap","quantity":1,"cents":1000}
+GET /report
+TABLE

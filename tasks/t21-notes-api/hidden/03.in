@@ -1,0 +1,10 @@
+POST /notes {"title":"a","body":"1"}
+POST /notes {"title":"b","body":"2"}
+POST /notes {"title":"c","body":"3"}
+DELETE /notes/2
+DELETE /notes/2
+GET /notes/2
+GET /notes/abc
+DELETE /notes/x
+GET /notes
+TABLE

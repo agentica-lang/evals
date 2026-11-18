@@ -1,0 +1,9 @@
+POST /notes not json
+POST /notes [1,2]
+POST /notes {"title":"","body":"x"}
+POST /notes {"title":"no body"}
+POST /notes {"title":5,"body":"x"}
+POST /notes {"title":"t","body":null}
+POST /notes {"title":"ok","body":"b","tags":["x"]}
+GET /notes
+TABLE
