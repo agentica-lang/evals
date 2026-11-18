@@ -1,9 +1,0 @@
-GET /orders
-PUT /report
-POST /customers/ana/orders {"x":1}
-GET /nope
-GET /customers/ana
-GET /customers/ana/orders/1
-POST /orders {"customer":"Ana.B-c_1","item":"✓ ünï","quantity":1,"cents":5}
-GET /customers/Ana.B-c_1/orders
-GET /report

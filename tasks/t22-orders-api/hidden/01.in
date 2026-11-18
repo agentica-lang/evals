@@ -1,7 +1,0 @@
-POST /orders {"customer":"ana","item":"pen","quantity":2,"cents":150}
-POST /orders {"customer":"bo","item":"ink","quantity":1,"cents":1000}
-POST /orders {"customer":"ana","item":"pad","quantity":3,"cents":200}
-GET /customers/ana/orders
-GET /customers/bo/orders
-GET /report
-TABLE

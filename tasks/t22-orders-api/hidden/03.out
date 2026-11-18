@@ -1,9 +1,0 @@
-POST /orders -> 201 application/json {"cents":500,"customer":"o'neil","id":1,"item":"cap","quantity":2}
-GET /customers/o'neil/orders -> 200 application/json {"customer":"o'neil","orders":[{"cents":500,"customer":"o'neil","id":1,"item":"cap","quantity":2}],"total_cents":1000}
-GET /customers/nobody/orders -> 404 application/json {"error":"not found"}
-GET /customers/x'y/orders -> 404 application/json {"error":"not found"}
-POST /orders -> 201 application/json {"cents":1000,"customer":"zed","id":2,"item":"cap","quantity":1}
-POST /orders -> 201 application/json {"cents":1000,"customer":"amy","id":3,"item":"cap","quantity":1}
-GET /report -> 200 application/json {"customers":[{"customer":"amy","orders":1,"total_cents":1000},{"customer":"o'neil","orders":1,"total_cents":1000},{"customer":"zed","orders":1,"total_cents":1000}]}
-customers: [[1,"o'neil"],[2,"zed"],[3,"amy"]]
-orders: [[1,1,"cap",2,500],[2,2,"cap",1,1000],[3,3,"cap",1,1000]]

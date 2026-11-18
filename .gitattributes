@@ -1,4 +1,3 @@
 * text=auto eol=lf
 *.agcb binary
 *.agc linguist-language=Ruby
-tasks/t19-orders-report/hidden/05.in binary

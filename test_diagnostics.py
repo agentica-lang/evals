@@ -43,7 +43,7 @@ class DiagnosticsTests(unittest.TestCase):
             + bash_call("8", "cd /workspace && ./bin/agentica --json a.agc", ESCAPED)
         )
         with tempfile.TemporaryDirectory() as directory:
-            run = Path(directory) / "t1-stats-binary-1"
+            run = Path(directory) / "t8-enum-ledger-binary-1"
             run.mkdir()
             (run / "agent.jsonl").write_text(
                 "\n".join(json.dumps(event) for event in events) + "\n", encoding="utf-8"
@@ -63,7 +63,7 @@ class DiagnosticsTests(unittest.TestCase):
 
     def test_skips_other_arms_and_unknown_directories(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            for name in ("t1-stats-python-1", "scratch"):
+            for name in ("t8-enum-ledger-python-1", "scratch"):
                 run = Path(directory) / name
                 run.mkdir()
                 (run / "agent.jsonl").write_text(
@@ -76,11 +76,11 @@ class DiagnosticsTests(unittest.TestCase):
 
     def test_run_names_split_into_task_and_arm(self) -> None:
         for name, task, arm in (
-            ("t1-stats-binary-1", "t1-stats", "binary"),
-            ("t9-inventory-orders-typed-python-12", "t9-inventory-orders", "typed-python"),
-            ("t9-inventory-orders-python-2", "t9-inventory-orders", "python"),
-            ("t20-big-log-skill-3", "t20-big-log", "skill"),
-            ("t11-gradebook-skill-nocli-1", "t11-gradebook", "skill-nocli"),
+            ("t8-enum-ledger-binary-1", "t8-enum-ledger", "binary"),
+            ("t16-robust-csv-typed-python-12", "t16-robust-csv", "typed-python"),
+            ("t16-robust-csv-python-2", "t16-robust-csv", "python"),
+            ("t18-stats-server-skill-3", "t18-stats-server", "skill"),
+            ("t21-notes-api-skill-nocli-1", "t21-notes-api", "skill-nocli"),
         ):
             with self.subTest(name=name):
                 found = diagnostics.RUN_NAME.match(name)
