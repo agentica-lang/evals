@@ -22,7 +22,8 @@ quoting: a comma always separates fields.
 3. The department (trimmed) is not empty. Otherwise `empty department`.
 4. The salary (trimmed) is an integer: digits with an optional leading `-` or
    `+`. Otherwise `bad salary "TEXT"`, where `TEXT` is the trimmed salary field,
-   between double quotes.
+   between double quotes. The quotes are a plain `"` on each side, and nothing
+   inside is escaped: the salary `"8"` gives `bad salary ""8""`.
 5. The salary is not negative. Otherwise `negative salary`.
 
 Salaries and department totals fit in a signed 64-bit integer.
