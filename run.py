@@ -37,8 +37,10 @@ RUNTIME = CACHE / "runtime"
 # The packages of the ecosystem tasks: agentica.toml and agentica.lock (Bond, agentica-db), go.mod and go.sum
 # (modernc.org/sqlite, which the image carries). The online docs follow the latest releases, which the lock pins.
 ECOSYSTEM = EVAL / "ecosystem"
-ECOSYSTEM_DOCS = ("https://www.agentica-lang.com/llms.txt, https://www.agentica-lang.com/bond/llms.txt and "
-                  "https://www.agentica-lang.com/agentica-db/llms.txt")
+# The docs of the pinned releases only: Bond's versioned llms.txt, and agentica-db's site pages at the locked commit
+# (it has no versioned llms.txt), copied into docs/agentica-db/. Not the site's root llms.txt, which links a Bond and
+# agentica-db tutorial that is nearly an ecosystem task.
+BOND_DOCS = "https://www.agentica-lang.com/bond/0.15.1/llms.txt"
 ARMS = {"skill": "agc", "grammar": "agc", "binary": "agc", "python": "py", "typed-python": "py", "skill-nocli": "agc",
         "go": "go"}
 TYPED_ARMS = {"typed-python"}
@@ -160,9 +162,10 @@ def git(*command: str, cwd: Path) -> str:
     return subprocess.run(["git", *command], cwd=cwd, check=True, capture_output=True, text=True).stdout.strip()
 
 
-def fetch_sources(commit: str) -> Path:
-    """A sparse, shallow checkout of the Agentica commit under .cache; git checks the commit hash."""
-    target = CACHE / f"agentica-{commit[:12]}"
+def fetch_sources(commit: str, paths: list[str] = SOURCE_PATHS, name: str = "agentica",
+                  repo: str | None = None) -> Path:
+    """A sparse, shallow checkout of `paths` of a commit of `repo` under .cache; git checks the commit hash."""
+    target = CACHE / f"{name}-{commit[:12]}"
     try:
         if (target / ".git").is_dir() and git("rev-parse", "HEAD", cwd=target) == commit:
             return target
@@ -172,8 +175,8 @@ def fetch_sources(commit: str) -> Path:
     shutil.rmtree(target, ignore_errors=True)
     target.mkdir(parents=True)
     git("init", "-q", cwd=target)
-    git("sparse-checkout", "set", *SOURCE_PATHS, cwd=target)
-    git("fetch", "-q", "--depth", "1", "--filter=blob:none", AGENTICA_REPO, commit, cwd=target)
+    git("sparse-checkout", "set", *paths, cwd=target)
+    git("fetch", "-q", "--depth", "1", "--filter=blob:none", repo or AGENTICA_REPO, commit, cwd=target)
     git("checkout", "-q", "--detach", "FETCH_HEAD", cwd=target)
     return target
 
@@ -272,21 +275,26 @@ ECOSYSTEM_DEPS: Path | None = None
 
 
 def ecosystem_deps() -> Path:
-    """The `deps/` of ecosystem/agentica.lock, installed once under .cache by the Agentica under test; the lock pins
-    each package's commit and hash."""
+    """The `deps/` of ecosystem/agentica.lock, installed under .cache by the Agentica under test, which checks each
+    package's commit and hash. `agentica install` runs every time (it is cheap when the packages are there), so a
+    partial `deps/` is never used. The docs of agentica-db come along (`docs/` next to `deps/`)."""
     global ECOSYSTEM_DEPS
+    binary = RUNTIME / "bin" / "agentica"
     lock = ECOSYSTEM / "agentica.lock"
-    project = CACHE / f"ecosystem-{sha256_of(lock)[:12]}"
-    if not (project / "deps").is_dir():
+    project = CACHE / f"ecosystem-{sha256_of(lock)[:12]}-{sha256_of(binary)[:12]}"
+    project.mkdir(parents=True, exist_ok=True)
+    for name in ("agentica.toml", "agentica.lock"):
+        shutil.copyfile(ECOSYSTEM / name, project / name)
+    done = subprocess.run([str(binary), "install"], cwd=project, capture_output=True, text=True)
+    if done.returncode != 0:
         shutil.rmtree(project, ignore_errors=True)
-        project.mkdir(parents=True)
-        for name in ("agentica.toml", "agentica.lock"):
-            shutil.copyfile(ECOSYSTEM / name, project / name)
-        done = subprocess.run([str(RUNTIME / "bin" / "agentica"), "install"], cwd=project, capture_output=True,
-                              text=True)
-        if done.returncode != 0:
-            shutil.rmtree(project, ignore_errors=True)
-            raise SystemExit(f"installing the ecosystem packages failed: {done.stderr.strip()[-500:]}")
+        raise SystemExit(f"installing the ecosystem packages failed: {done.stderr.strip()[-500:]}")
+    db = re.search(r'name = "db"\n(?:\w+ = .*\n)*?commit = "([0-9a-f]{40})"', lock.read_text(encoding="utf-8"))
+    if db is None:
+        raise SystemExit("ecosystem/agentica.lock has no commit for db")
+    docs = fetch_sources(db[1], ["site/content"], "agentica-db-docs", "https://github.com/agentica-lang/agentica-db")
+    shutil.rmtree(project / "docs", ignore_errors=True)
+    shutil.copytree(docs / "site" / "content", project / "docs" / "agentica-db")
     ECOSYSTEM_DEPS = project / "deps"
     return ECOSYSTEM_DEPS
 
@@ -305,6 +313,7 @@ def project_files(work: Path, task: str, ext: str) -> None:
         for name in ("agentica.toml", "agentica.lock"):
             shutil.copyfile(ECOSYSTEM / name, work / name)
         shutil.copytree(ECOSYSTEM_DEPS, work / "deps")
+        shutil.copytree(ECOSYSTEM_DEPS.parent / "docs", work / "docs", dirs_exist_ok=True)
 
 
 def start_file(task: str, arm: str) -> Path:
@@ -434,7 +443,8 @@ def prompt(work: Path, arm: str) -> str:
             lines.append("The language is described in docs/grammar.md, the builtin library in docs/library/, "
                          "and example programs are in examples/. Use `agentica help NAME` for builtin signatures.")
         if (work / "agentica.lock").exists():
-            lines.append(f"The packages in deps/ are documented online: {ECOSYSTEM_DOCS}.")
+            lines.append(f"The packages in deps/ are documented in docs/agentica-db/ (agentica-db) and at {BOND_DOCS} "
+                         "(Bond).")
     elif arm in TYPED_ARMS:
         lines.append("Write a complete Python 3 program to solution.py, with type annotations on every function. "
                      "Run programs with `python3`. The type checker is `mypy --strict solution.py`, on your PATH: "

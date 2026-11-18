@@ -7,6 +7,7 @@ import os
 import random
 import shutil
 import subprocess
+import sys
 import tarfile
 import tempfile
 import unittest
@@ -252,6 +253,45 @@ class SupplyChainTests(unittest.TestCase):
         self.assertEqual((unused["agentica_version"], unused["agentica_binary_sha256"]), (None, None))
 
 
+class TaskFaultTests(unittest.TestCase):
+    """Each fault of the t22 start, put back into the Python reference one at a time, fails a hidden case: the cases
+    see every fault the task asks to fix."""
+
+    FAULTS = {
+        "201 answered as 200": ("self.send_json(201, order(", "self.send_json(200, order("),
+        "a quantity of 0": ('whole(body.get("quantity"), 1)', 'whole(body.get("quantity"), 0)'),
+        "a decimal accepted": ("return type(value) is int and value >= least",
+                               "return isinstance(value, (int, float)) and not isinstance(value, bool) "
+                               "and value >= least"),
+        "SQL built from text": ('db.execute("select id from customers where name = ?", (body["customer"],))',
+                                "db.execute(f\"select id from customers where name = '{body['customer']}'\")"),
+        "totals without the quantity": ("sum(row[3] * row[4] for row in rows)", "sum(row[4] for row in rows)"),
+        "the report by name": ("order by total desc, c.name", "order by c.name"),
+    }
+
+    def failing_cases(self, source: str) -> list[str]:
+        task = run.TASKS / "t22-orders-api"
+        with tempfile.TemporaryDirectory() as directory:
+            program = Path(directory) / "solution.py"
+            program.write_text(source, encoding="utf-8")
+            failing = []
+            for case in sorted((task / "hidden").glob("*.in")):
+                done = subprocess.run([sys.executable, "-I", str(task / "hidden" / "driver.py"),
+                                       case.read_text(encoding="utf-8"), sys.executable, "-I", str(program)],
+                                      capture_output=True, text=True, timeout=120)
+                if done.stdout != case.with_suffix(".out").read_text(encoding="utf-8"):
+                    failing.append(case.stem)
+        return failing
+
+    def test_every_fault_of_the_t22_start_fails_a_case(self) -> None:
+        reference = (run.TASKS / "t22-orders-api" / "reference.py").read_text(encoding="utf-8")
+        self.assertEqual(self.failing_cases(reference), [])
+        for fault, (right, wrong) in self.FAULTS.items():
+            with self.subTest(fault=fault):
+                self.assertEqual(reference.count(right), 1)
+                self.assertNotEqual(self.failing_cases(reference.replace(right, wrong)), [])
+
+
 class PrepareTests(unittest.TestCase):
     def test_grammar_arm_writes_the_whole_specification(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -353,6 +393,8 @@ class PrepareTests(unittest.TestCase):
             deps = root / "deps"
             (deps / "bond").mkdir(parents=True)
             (deps / "bond" / "bond.agc").write_text("# bond\n", encoding="utf-8")
+            (root / "docs" / "agentica-db").mkdir(parents=True)
+            (root / "docs" / "agentica-db" / "_index.md").write_text("# db\n", encoding="utf-8")
             runtime = root / "runtime"
             (runtime / "bin").mkdir(parents=True)
             with (patch.object(run, "TASKS", root / "tasks"), patch.object(run, "RUNTIME", runtime),
@@ -363,17 +405,22 @@ class PrepareTests(unittest.TestCase):
             files = {arm: sorted(path.name for path in (root / arm).iterdir()) for arm in ("binary", "go", "python")}
             go_mod = (root / "go" / "go.mod").read_text(encoding="utf-8")
             installed = (root / "binary" / "deps" / "bond" / "bond.agc").is_file()
+            documented = (root / "binary" / "docs" / "agentica-db" / "_index.md").is_file()
 
-        self.assertEqual(files, {"binary": ["agentica.lock", "agentica.toml", "bin", "deps", "start.agc", "task.md"],
+        self.assertTrue(documented)
+        self.assertEqual(files, {"binary": ["agentica.lock", "agentica.toml", "bin", "deps", "docs", "start.agc",
+                                            "task.md"],
                                  "go": ["go.mod", "go.sum", "task.md"], "python": ["task.md"]})
         self.assertTrue(installed)
         self.assertIn("go 1.27\n", go_mod)
         self.assertIn("require modernc.org/sqlite v", go_mod)
-        self.assertIn("agentica-lang.com/bond/llms.txt", prompts["binary"])
+        self.assertIn("agentica-lang.com/bond/0.15.1/llms.txt", prompts["binary"])
+        self.assertIn("docs/agentica-db/", prompts["binary"])
+        self.assertNotIn("agentica-lang.com/llms.txt", prompts["binary"])
         self.assertIn("modernc.org/sqlite", prompts["go"])
         self.assertNotIn("llms.txt", prompts["python"] + prompts["go"])
 
-    def test_the_ecosystem_packages_are_installed_once_from_the_lock(self) -> None:
+    def test_the_ecosystem_packages_are_installed_from_the_lock_on_every_round(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             agentica = root / "runtime" / "bin" / "agentica"
@@ -381,16 +428,28 @@ class PrepareTests(unittest.TestCase):
             agentica.write_text("#!/bin/sh\n[ -f agentica.lock ] && mkdir -p deps/bond && echo run >> ../installs\n",
                                 encoding="utf-8")
             agentica.chmod(0o755)
+            docs = root / "db-docs"
+            (docs / "site" / "content").mkdir(parents=True)
+            (docs / "site" / "content" / "_index.md").write_text("# db\n", encoding="utf-8")
+            fetched = []
             cache = root / "cache"
             with (patch.object(run, "CACHE", cache), patch.object(run, "RUNTIME", root / "runtime"),
-                  patch.object(run, "ECOSYSTEM_DEPS", None)):
+                  patch.object(run, "ECOSYSTEM_DEPS", None),
+                  patch.object(run, "fetch_sources", lambda commit, *rest: fetched.append(commit) or docs)):
                 first = run.ecosystem_deps()
                 second = run.ecosystem_deps()
             installs = (cache / "installs").read_text(encoding="utf-8")
+            copied = (first.parent / "docs" / "agentica-db" / "_index.md").is_file()
+            binary_sha = run.sha256_of(agentica)
 
+        lock = (run.ECOSYSTEM / "agentica.lock").read_text(encoding="utf-8")
         self.assertEqual(first, second)
-        self.assertEqual(first.parent.name, f"ecosystem-{run.sha256_of(run.ECOSYSTEM / 'agentica.lock')[:12]}")
-        self.assertEqual(installs, "run\n")
+        self.assertEqual(first.parent.name, f"ecosystem-{run.sha256_of(run.ECOSYSTEM / 'agentica.lock')[:12]}-"
+                                            f"{binary_sha[:12]}")
+        self.assertEqual(installs, "run\nrun\n")
+        self.assertTrue(copied)
+        self.assertEqual(len(set(fetched)), 1)
+        self.assertIn(f'commit = "{fetched[0]}"', lock.split('name = "db"')[1].split("[[package]]")[0])
 
     def test_the_tasks_available_in_go(self) -> None:
         # Each part of the Go arm adds its tasks here.
@@ -1625,10 +1684,12 @@ class DockerGradingTests(unittest.TestCase):
         if run.go_probe(run.DEFAULT_IMAGE)[0] != 0:
             self.skipTest("evaluation image has no Go")
         run.ensure_go(run.DEFAULT_IMAGE)
-        sqlite = ('package main\n\nimport (\n\t"database/sql"\n\t"fmt"\n\n\t_ "modernc.org/sqlite"\n)\n\n'
+        # It prints 6 only when the module cache is read-only and GOPROXY is off where the program runs.
+        sqlite = ('package main\n\nimport (\n\t"database/sql"\n\t"fmt"\n\t"os"\n\n\t_ "modernc.org/sqlite"\n)\n\n'
                   'func main() {\n\tdb, _ := sql.Open("sqlite", ":memory:")\n\tvar n int\n'
                   '\tif err := db.QueryRow("select 3 * 2").Scan(&n); err != nil {\n\t\tpanic(err)\n\t}\n'
-                  '\tfmt.Println(n)\n}\n')
+                  '\tif os.WriteFile("/opt/go-mod/probe", nil, 0o644) == nil || os.Getenv("GOPROXY") != "off" {\n'
+                  '\t\tn = -1\n\t}\n\tfmt.Println(n)\n}\n')
         missing = 'package main\n\nimport "golang.org/x/text/language"\n\nfunc main() { println(language.English.String()) }\n'
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

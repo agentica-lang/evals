@@ -18,7 +18,7 @@ def order(row: tuple[int, str, str, int, int]) -> dict[str, Any]:
 
 
 def whole(value: object, least: int) -> bool:
-    return isinstance(value, int) and value >= least
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and int(value) >= least
 
 
 def valid_order(body: object) -> bool:
@@ -66,6 +66,7 @@ class Handler(BaseHTTPRequestHandler):
             body = None
         if not valid_order(body):
             return self.send_json(400, {"error": "invalid order"})
+        body["quantity"], body["cents"] = int(body["quantity"]), int(body["cents"])
         db.execute("insert or ignore into customers (name) values (?)", (body["customer"],))
         customer_id = db.execute(f"select id from customers where name = '{body['customer']}'").fetchone()[0]
         cursor = db.execute("insert into orders (customer_id, item, quantity, cents) values (?, ?, ?, ?)",

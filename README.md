@@ -352,24 +352,37 @@ Each arm builds it with the libraries a developer would take:
   agentica-db needs) by tag, commit and hash. The runner installs them once
   with the Agentica under test (`agentica install`) into `.cache/` and copies
   the manifest, the lock and `deps/` into the workspace, so neither the agent
-  nor the grader fetches anything. The prompt adds the online docs:
-  `https://www.agentica-lang.com/llms.txt` and the `llms.txt` of Bond and
-  agentica-db. They follow the latest releases, which are the pinned ones.
+  nor the grader fetches anything (`agentica install` runs on every round and
+  checks what is there, so a partial `deps/` is never used). The docs are the
+  ones of the pinned releases only: the prompt names Bond's versioned
+  `https://www.agentica-lang.com/bond/0.15.1/llms.txt`, and agentica-db's site
+  pages at the locked commit (it has no versioned `llms.txt`) are fetched with
+  the packages and copied into the workspace as `docs/agentica-db/`. Not the
+  site's root `llms.txt`: it links a Bond and agentica-db todo-API tutorial,
+  which is nearly t21 and t23.
 - Python: the standard library, `http.server` and `sqlite3`, as
-  agentica-lang/agentica#1843 allows; the image has no pip packages for it.
+  agentica-lang/agentica#1843 allows; the image has no pip packages for it,
+  and the prompt names no docs.
 - Go: `net/http` and `database/sql` with `modernc.org/sqlite` (pure Go, no
   cgo), pinned in `ecosystem/go.mod` and `ecosystem/go.sum`. The image
   downloads it at build time into a read-only module cache
   (`GOMODCACHE=/opt/go-mod`, about 260 MB) and warms the build cache for it,
   so a check takes about a second. At run time `GOPROXY` stays off: another
   module does not build. The workspace gets that `go.mod` and `go.sum`, and the
-  prompt names the module.
+  prompt names the module (no docs: the Go arm knows the standard library and
+  `database/sql`).
 
 The agent container has network, as for every task, so the agent can read the
-docs; the 20 offline tasks do not need it, and the grading stays offline. The
+docs; the 20 offline tasks do not need it, and the grading stays offline. An
+Agentica arm that reads Bond's docs with `curl` counts in `net_commands` on
+these tasks. The
 hidden driver starts the service on a fresh database file, sends the requests,
 runs SQL on the file from outside (so a service that keeps the notes in memory
-fails), reads the table, and restarts the service on the same file. A `405`
+fails), reads the table, and restarts the service on the same file. Its SQL
+does not wait for a lock (`timeout=0`): the task says a change is committed
+before its answer, so a service that answers first and commits after fails a
+case. A case may take 30 seconds (`hidden/timeout`), as a restart starts the
+service again. A `405`
 shows the status alone, because Bond answers it in plain text by itself. The
 agentica-db native SQLite driver needs a C compiler, which the image does not
 have, so Agentica runs its FFI driver, with a warning on stderr.
