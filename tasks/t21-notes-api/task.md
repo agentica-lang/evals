@@ -26,7 +26,7 @@ input.
 
 Every request reads and writes the database: other programs may change the
 table while the service runs, and a service started again on the same file finds
-the notes it had.
+the notes it had. A change is committed before its answer is sent.
 
 ## The routes
 
