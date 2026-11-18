@@ -206,9 +206,11 @@ class PrepareTests(unittest.TestCase):
             (task / "start.py").write_text("untyped\n", encoding="utf-8")
             (task / "start.typed.py").write_text("typed\n", encoding="utf-8")
             (task / "start.agc").write_text("agentica\n", encoding="utf-8")
-            with patch.object(run, "ROOT", root), patch.object(run, "RUNTIME", root / "dist" / "runtime"), patch.object(run, "TASKS", root / "tasks"):
+            (task / "start.go").write_text("go\n", encoding="utf-8")
+            with (patch.object(run, "ROOT", root), patch.object(run, "RUNTIME", root / "dist" / "runtime"),
+                  patch.object(run, "TASKS", root / "tasks"), patch.object(run, "GO_LANGUAGE", "1.27")):
                 for arm, start, runtime in (("typed-python", "typed\n", False), ("python", "untyped\n", False),
-                                            ("binary", "agentica\n", True)):
+                                            ("binary", "agentica\n", True), ("go", "go\n", False)):
                     work = root / f"work-{arm}"
                     run.prepare(work, "sample", arm)
                     ext = run.ARMS[arm]
@@ -216,6 +218,48 @@ class PrepareTests(unittest.TestCase):
                         self.assertEqual((work / f"start.{ext}").read_text(encoding="utf-8"), start)
                         self.assertEqual((work / "bin" / "agentica").exists(), runtime)
                         self.assertFalse((work / "start.typed.py").exists())
+                        self.assertEqual((work / "go.mod").exists(), arm == "go")
+            self.assertEqual((root / "work-go" / "go.mod").read_text(encoding="utf-8"), "module solution\n\ngo 1.27\n")
+
+    def test_the_go_version_comes_from_the_image(self) -> None:
+        with patch.object(run, "GO_LANGUAGE", None), patch.object(run, "probe", return_value=(0, "go1.27.4\n", "")):
+            self.assertEqual(run.ensure_go("custom:1"), "go1.27.4")
+            self.assertEqual(run.go_mod(), "module solution\n\ngo 1.27\n")
+        with (patch.object(run, "GO_LANGUAGE", None), patch.object(run, "probe", return_value=(0, "devel x\n", "")),
+              self.assertRaises(SystemExit)):
+            run.ensure_go("custom:1")
+
+    def test_go_files_come_as_a_reference_and_a_start_where_python_has_one(self) -> None:
+        for task in sorted(run.TASKS.iterdir()):
+            if not (task / "reference.go").is_file():
+                continue
+            with self.subTest(task=task.name):
+                self.assertEqual((task / "start.go").is_file(), (task / "start.py").is_file())
+
+    def test_a_task_without_go_files_is_skipped_by_the_go_arm_only(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            tasks = Path(directory)
+            for name in ("t1", "t2", "t3"):
+                (tasks / name).mkdir()
+            (tasks / "t1" / "reference.go").write_text("package main\n")
+            (tasks / "t3" / "reference.go").write_text("package main\n")
+            with patch.object(run, "TASKS", tasks), contextlib.redirect_stdout(io.StringIO()) as printed:
+                limited = run.limit_go_tasks(["python", "go"], ["t1", "t2", "t3"], {"python": ["t2"]})
+                untouched = run.limit_go_tasks(["python"], ["t1", "t2"], {})
+
+        self.assertEqual(limited, {"python": ["t2"], "go": ["t1", "t3"]})
+        self.assertEqual(untouched, {})
+        self.assertIn("not available in Go yet (no reference.go), skipped: t2", printed.getvalue())
+        self.assertEqual(run.run_order(["t1", "t2", "t3"], ["python", "go"], limited, 1),
+                         [("t1", "go", 1), ("t2", "python", 1), ("t3", "go", 1)])
+
+    def test_go_prompt_names_both_checkers_in_file_mode_and_the_go_arm_is_opt_in(self) -> None:
+        text = run.prompt(Path("/tmp/work"), "go")
+
+        self.assertIn("`go vet solution.go` and `go build solution.go`", text)
+        self.assertIn("standard library only", text)
+        self.assertNotIn("go", run.DEFAULT_ARMS)
+        self.assertIn("go", run.REFERENCE_ARMS)
 
     def test_missing_typed_start_falls_back_and_a_task_without_a_start_gets_none(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -540,6 +584,42 @@ class MetricsTests(unittest.TestCase):
                 new = run.pi_metrics("\n".join(events))
                 self.assertEqual({key: new[key] for key in LEGACY_KEYS}, legacy_pi_metrics("\n".join(events)))
 
+    def test_a_go_vet_and_the_go_build_after_it_are_one_check(self) -> None:
+        vet_error = "# command-line-arguments\nvet: ./solution.go:3:5: undefined: x"
+        build_error = "# command-line-arguments\n./solution.go:3:5: undefined: x"
+        rows = {
+            "both pass": ([("go vet solution.go", "ok"), ("go build solution.go", "")], (1, 0, 0)),
+            "one command": ([("go vet solution.go && go build solution.go", vet_error)], (1, 1, 1)),
+            "vet fails": ([("go vet solution.go", vet_error), ("go build solution.go", build_error)], (1, 1, 1)),
+            "build fails": ([("go vet solution.go", ""), ("go build solution.go", build_error)], (1, 1, 1)),
+            "edit between": ([("go vet solution.go", vet_error), ("sed -i s/x/y/ solution.go", ""),
+                              ("go build solution.go", build_error)], (2, 2, 2)),
+        }
+        for name, (calls, expected) in rows.items():
+            events = [line for number, (command, output) in enumerate(calls)
+                      for line in bash_events(str(number), command, output)]
+            metrics = run.pi_metrics("\n".join(events))
+            with self.subTest(name=name):
+                self.assertEqual((metrics["check_runs"], metrics["check_failures"], metrics["failing_runs"]),
+                                 expected)
+
+    def test_a_built_program_is_a_run_and_its_panic_a_failing_run(self) -> None:
+        events = (bash_events("1", "go build -o /tmp/s solution.go", "")
+                  + bash_events("2", "echo 3 | /tmp/s", "panic: runtime error: index out of range")
+                  + bash_events("3", "go -C /workspace build solution.go", "")
+                  + bash_events("4", "./solution < in.txt", "6")
+                  + bash_events("5", "./other", "panic: x"))
+        metrics = run.pi_metrics("\n".join(events))
+
+        self.assertEqual((metrics["interpreter_runs"], metrics["failing_runs"], metrics["check_runs"]), (4, 1, 2))
+
+    def test_go_downloads_are_net_commands(self) -> None:
+        for command in ("go get golang.org/x/text", "go install example.com/x@latest", "go mod download",
+                        "GOPROXY=https://proxy.golang.org go build", "go -C w get x"):
+            with self.subTest(command=command):
+                self.assertTrue(run.is_net_command(command))
+        self.assertFalse(run.is_net_command("go build solution.go"))
+
     def test_only_the_go_run_and_check_subcommands_are_runs(self) -> None:
         for command in ("go vet solution.go", "go build solution.go", "go run solution.go", "go test ./...",
                         "bash -c 'go run solution.go'"):
@@ -560,6 +640,8 @@ class MetricsTests(unittest.TestCase):
         self.assertFalse(run.command_failed("cat x.go", "./solution.go:4:2: undefined: x"))
         self.assertTrue(run.command_failed("go test ./...", "    solution_test.go:12: got 3, want 4\n--- FAIL: TestX"))
         self.assertTrue(run.command_failed("go test ./...", "--- FAIL: TestX (0.00s)"))
+        self.assertTrue(run.command_failed("go vet solution.go", "# command-line-arguments\n"
+                                           "vet: ./solution.go:11:9: invalid operation: mismatched types"))
         self.assertFalse(run.command_failed("go build ./...", "# example.com/solution"))
 
     def test_spend_is_pis_cost_or_the_list_price_of_the_tokens(self) -> None:
@@ -572,6 +654,59 @@ class MetricsTests(unittest.TestCase):
         self.assertAlmostEqual(table["cost_input"] + table["cost_cache"] + table["cost_output"], table["cost"])
         self.assertEqual(run.spend({"model": "other/m", "cost": 0.0, **tokens}), {"cost": 0.0, "cost_source": "none"})
         self.assertEqual(run.spend({"model": model, "cost": 0.0})["cost_source"], "none")
+
+
+class StartParityTests(unittest.TestCase):
+    def test_a_go_start_that_grades_unlike_the_python_start_fails_the_check(self) -> None:
+        outcomes = {("t2", "typed-python"): ("fail", 0, "check"), ("t2", "go"): ("fail", 0, "check"),
+                    ("t9", "typed-python"): ("fail", 1, "logic"), ("t9", "go"): ("fail", 0, "runtime")}
+        args = Namespace(tasks=["t2", "t9", "t1"], jobs=2)
+        with (patch.object(run, "start_outcome", lambda args, scratch, task, arm: outcomes[task, arm]),
+              patch.object(Path, "is_file", lambda path: path.parent.name != "t1"),
+              contextlib.redirect_stdout(io.StringIO()) as printed):
+            code = run.check_starts(args)
+
+        self.assertEqual(code, 1)
+        self.assertIn("starts that differ: t9", printed.getvalue())
+        self.assertNotIn("t1:", printed.getvalue())
+
+
+class GoCheckTests(unittest.TestCase):
+    def check(self, vet: tuple, build: tuple = ("", "", 0)) -> dict | None:
+        steps: list[list[str]] = []
+
+        def step(result: tuple) -> run.Contained:
+            return lambda command, stdin, timeout: steps.append(command) or result
+
+        found = run.go_check(step(vet), step(build), 3)
+        self.steps = steps
+        return found
+
+    def test_vet_then_build_and_the_first_failure_is_the_row(self) -> None:
+        self.assertIsNone(self.check(("", "", 0)))
+        self.assertEqual(self.steps, [run.GO_VET, run.GO_BUILD])
+        vet = self.check(("", "./solution.go:9:2: fmt.Printf format %s has arg n of wrong type int\n", 1))
+        self.assertEqual(self.steps, [run.GO_VET])
+        build = self.check(("", "", 0), ("", "# command-line-arguments\n./solution.go:3:5: x declared and not used\n"
+                                         "./solution.go:4:5: y declared and not used\n", 1))
+        syntax = self.check(("", "./solution.go:3:1: syntax error: unexpected }\n", 1))
+        typed = self.check(("", "# command-line-arguments\nvet: ./solution.go:11:9: invalid operation\n", 1),
+                           ("", "# command-line-arguments\n" + "./solution.go:11:9: invalid operation\n" * 6, 1))
+        self.assertEqual(self.steps, [run.GO_VET, run.GO_BUILD])
+        self.assertEqual((typed["code"], typed["check_errors"]), ("vet", 6))
+        slow = self.check((None, "timeout", None))
+
+        self.assertEqual((vet["failure"], vet["code"], vet["check_errors"], vet["passed"]), ("check", "vet", 1, 0))
+        self.assertEqual((build["failure"], build["code"], build["check_errors"]), ("check", "build", 2))
+        self.assertEqual((syntax["failure"], syntax["code"]), ("syntax", "syntax"))
+        self.assertEqual((slow["failure"], slow["code"]), ("check-timeout", "vet"))
+
+    def test_go_cases_run_the_built_binary(self) -> None:
+        self.assertEqual(run.case_invocation("go", None, "1\n"), (["/workspace/solution"], "1\n"))
+        self.assertEqual(run.case_invocation("go", "driver", "1\n"),
+                         (["python3", "-I", "-", "1\n", "/workspace/solution"], "driver"))
+        self.assertEqual(run.classify("panic: index out of range\n", "go"), ("runtime", "panic"))
+        self.assertEqual(run.classify("", "go"), ("logic", None))
 
 
 class CheckerGradingTests(unittest.TestCase):
@@ -686,7 +821,7 @@ class ImageDecisionTests(unittest.TestCase):
                 result = self.validate(checker_probe=[(code, "", "not found"), found])
                 self.assertEqual(self.build.call_count, 1)
                 self.assertIn("rebuilding", self.printed)
-                self.assertEqual(result, {"checker": "mypy 2.3.1 (compiled: yes)", "image_id": "sha256:abc", "pi": None})
+                self.assertEqual(result, {"checker": "mypy 2.3.1 (compiled: yes)", "go": None, "image_id": "sha256:abc", "pi": None})
         for first in ((1, "", "crash"), (None, "", "timeout")):
             self.build.reset_mock()
             with self.subTest(first=first), self.assertRaises(SystemExit):
@@ -750,9 +885,10 @@ class MainTests(unittest.TestCase):
         validated: list = []
 
         def fake_validate(image: str, typed: bool = False, agentica: bool = False,
-                          pi: bool = False) -> dict[str, str | None]:
+                          pi: bool = False, go: bool = False) -> dict[str, str | None]:
             validated.append((image, typed, agentica))
-            return {"checker": "mypy 9.9", "image_id": "sha256:feed", "pi": "1.3.0" if pi else None}
+            return {"checker": "mypy 9.9", "go": "go1.27.4" if go else None, "image_id": "sha256:feed",
+                    "pi": "1.3.0" if pi else None}
 
         with (patch.object(run, "ROOT", root), patch.object(run, "RUNTIME", root / "dist" / "runtime"), patch.object(run, "EVAL", root / "eval"),
               patch.object(run, "install_runtime") as build, patch.object(run, "use_sources"),
@@ -775,7 +911,7 @@ class MainTests(unittest.TestCase):
             root = Path(directory)
             (root / "dist" / "runtime" / "bin").mkdir(parents=True, exist_ok=True)
             (root / "dist" / "runtime" / "bin" / "agentica").write_text("binary")
-            argv = ["--check-references", "--agent", "pi", "--pass-env", "FOO", "--tasks", "t1", "--image", "custom:1"]
+            argv = ["--check-references", "--agent", "pi", "--pass-env", "FOO", "--tasks", "t1-stats", "--image", "custom:1"]
 
             code, calls, validated = self.main(root, argv, "fail")
             failing = self.result_info(root)
@@ -783,7 +919,7 @@ class MainTests(unittest.TestCase):
             ok_code, _, _ = self.main(root, argv, "pass")
             shutil.rmtree(root / "eval")
             normal_code, normal_calls, normal_validated = self.main(
-                root, ["--agent", "pi", "--pass-env", "FOO", "--tasks", "t1"], "pass")
+                root, ["--agent", "pi", "--pass-env", "FOO", "--tasks", "t1-stats"], "pass")
             normal = self.result_info(root)
 
         self.assertEqual((code, ok_code, normal_code), (1, 0, 0))
@@ -1200,7 +1336,7 @@ class DockerGradingTests(unittest.TestCase):
         require_docker_image(checker=True)
 
     def grade(self, root: Path, name: str, source: str, arm: str = "typed-python") -> dict:
-        solution = root / "solution.py"
+        solution = root / f"solution.{run.ARMS[arm]}"
         solution.write_text(source, encoding="utf-8")
         args = Namespace(sandbox="docker", image=run.DEFAULT_IMAGE, chroot_root=None)
         scratch = root / "scratch"
@@ -1229,6 +1365,38 @@ class DockerGradingTests(unittest.TestCase):
                          ("fail", 0, "check", "assignment"))
         self.assertEqual(result["check_errors"], 1)
         self.assertEqual((untyped["status"], untyped["passed"]), ("pass", 1))
+
+    def test_go_arm_vets_builds_offline_and_runs_the_binary(self) -> None:
+        if run.go_probe(run.DEFAULT_IMAGE)[0] != 0:
+            self.skipTest("evaluation image has no Go")
+        run.ensure_go(run.DEFAULT_IMAGE)
+        doubled = ('package main\n\nimport (\n\t"bufio"\n\t"fmt"\n\t"os"\n\t"strconv"\n\t"strings"\n)\n\n'
+                   'func main() {\n\tline, _ := bufio.NewReader(os.Stdin).ReadString(\'\\n\')\n'
+                   '\tn, _ := strconv.Atoi(strings.TrimSpace(line))\n\tfmt.Println(n * 2)\n}\n')
+        vet = 'package main\n\nimport "fmt"\n\nfunc main() {\n\tfmt.Printf("%s\\n", 6)\n}\n'
+        unused = 'package main\n\nimport "fmt"\n\nfunc main() {\n\tx := 1\n\tfmt.Println(6)\n}\n'
+        # Packages outside the closure of the tasks' imports: the image warms the whole public std.
+        wide = ('package main\n\nimport (\n\t"container/heap"\n\t"fmt"\n\t"html"\n\t"io/ioutil"\n\t"os"\n)\n\n'
+                'type ints []int\n\nfunc (h ints) Len() int           { return len(h) }\n'
+                'func (h ints) Less(i, j int) bool { return h[i] < h[j] }\n'
+                'func (h ints) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }\n'
+                'func (h *ints) Push(x any)        { *h = append(*h, x.(int)) }\n'
+                'func (h *ints) Pop() any          { old := *h; x := old[len(old)-1]; *h = old[:len(old)-1]; return x }\n\n'
+                'func main() {\n\tdata, _ := ioutil.ReadAll(os.Stdin)\n\th := &ints{}\n\theap.Push(h, len(data)+4)\n'
+                '\tfmt.Println(html.EscapeString(fmt.Sprint(heap.Pop(h))))\n}\n')
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.sample_task(root)
+            results = [self.grade(root, name, source, arm="go")
+                       for name, source in (("go-ok", doubled), ("go-vet", vet), ("go-unused", unused),
+                                            ("go-wide", wide),
+                                            ("go-t2-start", (run.TASKS / "t2-fix-types" / "start.go").read_text()))]
+
+        self.assertEqual([(r["status"], r["passed"], r["failure"], r["code"]) for r in results],
+                         [("pass", 1, None, None), ("fail", 0, "check", "vet"), ("fail", 0, "check", "vet"),
+                          ("pass", 1, None, None), ("fail", 0, "check", "vet")])
+        # go vet stops at the first type error of the t2 start; the build lists all six.
+        self.assertEqual(results[-1]["check_errors"], 6)
 
     def test_typed_arm_passes_a_checked_solution_and_counts_type_ignores(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
