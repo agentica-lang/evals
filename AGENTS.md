@@ -19,7 +19,9 @@ results/            run output (never committed)
 
 ## Commands
 
-- `python3 -m unittest discover -p 'test_*.py'`: the unit tests.
+- `python3 -m unittest discover -p 'test_*.py'`: the unit tests. The tests
+  that need the pinned Agentica sources fetch them once into `.cache/` and are
+  skipped when that fails (offline); the Docker tests need the image.
 - `python3 run.py --check-references`: every reference passes every hidden
   case; no model, no credentials.
 - `python3 run.py --agent pi --model M --pi-auth .secrets/pi-auth.json ...`: a

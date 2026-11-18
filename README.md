@@ -136,6 +136,11 @@ versioned. Two options replace them:
 - `--agentica-src PATH`: an agentica checkout for the skill, `docs/grammar/`,
   `site/content/library/` and `examples/`.
 
+Only a round with an Agentica arm fetches them; a Python-only round needs no
+network for them. `run.json` records `agentica_version`, `agentica_commit`,
+`agentica_binary_sha256`, and whether `--agentica` or `--agentica-src` replaced
+the pins (`agentica_override`, `agentica_src_override`).
+
 To move to a new release, change `AGENTICA_VERSION`, `AGENTICA_ARCHIVE_SHA256`
 and `AGENTICA_COMMIT` together and run `--check-references`.
 
@@ -214,9 +219,11 @@ by weakening its options.
   the arms: `summary.md` shows their mean in the `type escapes` column.
 - Measures: `interpreter_runs` counts every bash call that runs `agentica`,
   `python`, `mypy` or `go vet|build|run|test`; `check_runs` counts the calls
-  to `mypy`, `agentica check`, `go vet` and `go build`, with a `go build`
-  right after a `go vet` call (no edit or other run between) counted with it as
-  one check (both a lower bound: a
+  to `mypy`, `agentica check`, `go vet` and `go build`. A `go vet` and a
+  `go build` in calls next to each other, in either order (no edit or other run
+  between), are one interpreter run, one check run and one failure at most,
+  because the Go check is the two commands where the other arms have one (both
+  a lower bound: a
   command is recognised at the start of a shell segment, also after `do`,
   `then`, `else`, `!`, `{`, `(`, `$(` or a backtick, after the `env`, `time`,
   `timeout`, `nohup`, `xargs`, `uv run` and `NAME=value` prefixes, and inside
@@ -261,7 +268,8 @@ that have one.
   `GOTOOLCHAIN=local` and `CGO_ENABLED=0`, so Go works offline by default; the
   agent container has network, so an agent that sets `GOPROXY` itself can
   still download (`net_commands` counts `go get`, `go install`,
-  `go mod download`, `GOPROXY=` and `golang.org`). The image carries a
+  `go mod download`, `go mod tidy`, `GOPROXY=`, `golang.org` and `pkg@version`
+  or `@latest`). The image carries a
   read-only build cache of the whole public standard library (every
   `go list std` package outside `internal`, `vendor` and `cmd`;
   `GOCACHE=/opt/go-cache`, about 160 MB). Go reads a read-only cache but cannot
@@ -270,11 +278,15 @@ that have one.
 - Grading: `go vet solution.go`, then `go build -o solution solution.go`, in a
   fresh container with the workspace writable for the binary. A failure is
   `failure: check` with `code` `vet` or `build` (`syntax` for a syntax error)
-  and `check_errors`, the number of `file.go:line:` lines. `go vet` type-checks
-  first and stops at the first type error (an unused variable is one, so its
-  code is `vet`); then the grader also runs `go build -gcflags=-e` and counts
-  its errors, so the t2 start has 6, not 1. The hidden cases then run the
-  binary. A `panic:` is `failure: runtime`, code `panic`.
+  and `check_errors`, the number of `file.go:line:` lines. The build always
+  runs. `go vet` type-checks first and stops at the first type or syntax error
+  (its `vet: ` line; an unused variable is a type error, so its code is `vet`):
+  then the class (`syntax error` gives `syntax`) and the count come from
+  `go build -gcflags=-e`, so the t2 start has 6 errors, not 1. A vet failure
+  records `build_ok`, and `summary.md` counts the go runs that failed vet alone
+  (the build passed). The hidden cases then run the binary. A `panic:` is
+  `failure: runtime`, code `panic`, and a `fatal error:` (a deadlock) code
+  `fatal`. Go rows have no `type_escapes` (`-` in `summary.md`).
 - Starts: `start.go` keeps the bugs of `start.py` and has `//go:build ignore`,
   so `go build .` leaves it out. The t2 and t5 starts do not compile, like the
   typed starts; the other starts give the output of `start.py` on the hidden
@@ -312,7 +324,8 @@ What is not equal to the other arms:
 ### Spend and fix rounds
 
 Every row and `summary.md` have two more figures; `summary.md` also totals
-them per arm.
+them per arm, over the tasks every arm ran (the go arm skips a task without Go
+files), and lists the tasks of each arm.
 
 - `cost` (the `spend $` column) is the cost Pi reports, `cost_source: agent`.
   When Pi reports 0 for a run that used tokens, the runner prices the tokens
