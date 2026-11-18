@@ -564,6 +564,33 @@ claims; the raw tables are in git history.
   with 4.7 and 4.8 times the context. Input and cache reads are 75% and 81% of
   the extra cost, so the context, not the output, is what to cut.
 
+## Benchmark twins
+
+`bench/` times agentica's benchmark programs against a Python and a Go twin of
+each, to compare the speed of the three. The Agentica programs and the Python
+twins come from agentica's `benchmarks/` at the pinned commit
+(`AGENTICA_COMMIT`, the 0.34.1 tag; agentica's master no longer has the Python
+twins), fetched into `.cache/` like the sources. The Go twins are in
+`bench/go/`, one file per program, and print the same.
+
+```sh
+make bench                  # median of 5 runs after one warm-up run, size 1
+make bench RUNS=9 SIZE=10   # more runs, ten times the work
+make bench-check            # one run each: the three outputs must match (CI)
+```
+
+`bench/run.py` stages the scaled programs, the twins and the pinned binary,
+and runs `bench/measure.py` in one container of the evaluation image with no
+network, so the three runners share the machine, Python 3.13 and Go 1.27. It
+builds the Go twins first (the build time is printed, not counted), then runs
+each program as `agentica FILE.agc` (which includes the front end), `python3`
+and the Go binary. A run whose output differs from Agentica's is a `mismatch`.
+The table has the median seconds and two ratios: `python / agentica` (above 1,
+Agentica is faster) and `agentica / go` (how many times slower than Go). At
+size 1 most programs run for tens of milliseconds, so start-up weighs a lot;
+use `SIZE` for steady-state numbers. A load average above 2 is noted, as the
+numbers are then rough.
+
 ## Diagnostics
 
 `diagnostics.py` counts the codes the agents saw. In the `binary`

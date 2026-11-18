@@ -155,9 +155,9 @@ def git(*command: str, cwd: Path) -> str:
     return subprocess.run(["git", *command], cwd=cwd, check=True, capture_output=True, text=True).stdout.strip()
 
 
-def fetch_sources(commit: str) -> Path:
-    """A sparse, shallow checkout of the Agentica commit under .cache; git checks the commit hash."""
-    target = CACHE / f"agentica-{commit[:12]}"
+def fetch_sources(commit: str, paths: list[str] = SOURCE_PATHS, name: str = "agentica") -> Path:
+    """A sparse, shallow checkout of `paths` of the Agentica commit under .cache; git checks the commit hash."""
+    target = CACHE / f"{name}-{commit[:12]}"
     try:
         if (target / ".git").is_dir() and git("rev-parse", "HEAD", cwd=target) == commit:
             return target
@@ -167,7 +167,7 @@ def fetch_sources(commit: str) -> Path:
     shutil.rmtree(target, ignore_errors=True)
     target.mkdir(parents=True)
     git("init", "-q", cwd=target)
-    git("sparse-checkout", "set", *SOURCE_PATHS, cwd=target)
+    git("sparse-checkout", "set", *paths, cwd=target)
     git("fetch", "-q", "--depth", "1", "--filter=blob:none", AGENTICA_REPO, commit, cwd=target)
     git("checkout", "-q", "--detach", "FETCH_HEAD", cwd=target)
     return target
