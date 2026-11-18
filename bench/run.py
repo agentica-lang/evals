@@ -28,7 +28,8 @@ GO_VERSION = re.search(r"^ARG GO_VERSION=(\S+)$", (BENCH.parent / "Dockerfile").
 # A start-up baseline: the smallest program in each language.
 HELLO = {"programs/hello.agc": 'def main() -> Void\n  puts("hello")\nend\n', "python/hello.py": 'print("hello")\n',
          "go/hello.go": 'package main\n\nimport "fmt"\n\nfunc main() {\n\tfmt.Println("hello")\n}\n'}
-SCALE_DEF = re.compile(r"^def scale\(\) -> Int\n  (?:return )?1\nend\n", re.MULTILINE)
+# The work size of a program: `def scale() -> Int` returning 1, in its block or its one-line form.
+SCALE_DEF = re.compile(r"^def scale\(\) -> Int(?:\n  (?:return )?1\nend| = 1)$", re.MULTILINE)
 
 
 def stage(directory: Path, names: list[str], size: int) -> None:
@@ -39,7 +40,7 @@ def stage(directory: Path, names: list[str], size: int) -> None:
         (directory / folder).mkdir()
     for name in names:
         text = (sources / "benchmarks" / "programs" / f"{name}.agc").read_text(encoding="utf-8")
-        scaled, found = SCALE_DEF.subn(f"def scale() -> Int\n  {size}\nend\n", text)
+        scaled, found = SCALE_DEF.subn(f"def scale() -> Int = {size}", text)
         if found != 1:
             raise SystemExit(f"{name}.agc has no `def scale` returning 1")
         (directory / "programs" / f"{name}.agc").write_text(scaled, encoding="utf-8")
