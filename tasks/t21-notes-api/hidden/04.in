@@ -1,0 +1,10 @@
+SQL insert into notes (id, title, body) values (10, 'from outside', 'sql')
+GET /notes
+GET /notes/10
+POST /notes {"title":"after","body":"insert"}
+SQL delete from notes where id = 10
+GET /notes/10
+RESTART
+GET /notes
+POST /notes {"title":"again","body":"restart"}
+TABLE

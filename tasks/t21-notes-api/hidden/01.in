@@ -1,0 +1,9 @@
+GET /health
+GET /notes
+POST /notes {"title":"milk","body":"2 liters"}
+POST /notes {"title":"call Ana","body":""}
+GET /notes
+GET /notes/1
+GET /notes/2
+GET /notes/3
+TABLE

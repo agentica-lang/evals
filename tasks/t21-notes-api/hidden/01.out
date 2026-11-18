@@ -1,0 +1,9 @@
+GET /health -> 200 application/json {"status":"ok"}
+GET /notes -> 200 application/json {"notes":[]}
+POST /notes -> 201 application/json {"body":"2 liters","id":1,"title":"milk"}
+POST /notes -> 201 application/json {"body":"","id":2,"title":"call Ana"}
+GET /notes -> 200 application/json {"notes":[{"body":"2 liters","id":1,"title":"milk"},{"body":"","id":2,"title":"call Ana"}]}
+GET /notes/1 -> 200 application/json {"body":"2 liters","id":1,"title":"milk"}
+GET /notes/2 -> 200 application/json {"body":"","id":2,"title":"call Ana"}
+GET /notes/3 -> 404 application/json {"error":"not found"}
+table: [[1,"milk","2 liters"],[2,"call Ana",""]]

@@ -1,0 +1,11 @@
+SQL create table todos (id integer primary key, title text not null)
+SQL insert into todos (id, title) values (7, 'seven')
+RESTART
+GET /todos
+DELETE /todos
+PUT /todos {"title":"x"}
+GET /nope
+GET /todos/7
+POST /todos {"title":"ünï ✓ \"q\""}
+GET /todos?priority=2
+TABLE

@@ -1,0 +1,9 @@
+POST /notes -> 400 application/json {"error":"invalid note"}
+POST /notes -> 400 application/json {"error":"invalid note"}
+POST /notes -> 400 application/json {"error":"invalid note"}
+POST /notes -> 400 application/json {"error":"invalid note"}
+POST /notes -> 400 application/json {"error":"invalid note"}
+POST /notes -> 400 application/json {"error":"invalid note"}
+POST /notes -> 201 application/json {"body":"b","id":1,"title":"ok"}
+GET /notes -> 200 application/json {"notes":[{"body":"b","id":1,"title":"ok"}]}
+table: [[1,"ok","b"]]
