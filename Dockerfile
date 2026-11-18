@@ -29,8 +29,9 @@ ARG GO_VERSION
 COPY --from=go /usr/local/go /usr/local/go
 # The root file system is read-only at run time, so the build cache is warmed here for the whole public standard
 # library (`go list std` without internal, vendor and cmd): Go reads a read-only cache but cannot add to it, and a
-# package it has never indexed is then "not in std".
-ENV GOCACHE=/opt/go-cache GOPATH=/tmp/go GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local CGO_ENABLED=0
+# package it has never indexed is then "not in std". The module index is off (GODEBUG=goindex=0): Go indexes a
+# folder of the workspace whose files are older than two seconds and fails when it cannot write that index.
+ENV GOCACHE=/opt/go-cache GOPATH=/tmp/go GOFLAGS=-mod=mod GOPROXY=off GOTOOLCHAIN=local CGO_ENABLED=0 GODEBUG=goindex=0
 RUN ln -s /usr/local/go/bin/go /usr/local/go/bin/gofmt /usr/local/bin/ \
     && mkdir /opt/go-warm && cd /opt/go-warm && printf 'module warm\n\ngo %s\n' "${GO_VERSION%.*}" > go.mod \
     && { printf 'package main\n\nimport (\n'; \
