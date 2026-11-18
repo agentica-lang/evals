@@ -621,7 +621,8 @@ A hidden case's name prefix puts it in a tier, in any task:
 | none | main | yes | `passed` of `total` |
 
 `passed` and `total` leave the adversarial cases out; a task needs at least
-one other case. A run whose cases did not run (no file, a failed check, a
+one other case. `failed_cases` names the cases that failed (of every tier),
+and `--check-references` prints them for a reference that fails. A run whose cases did not run (no file, a failed check, a
 `size` or `copy` failure) fails every regression and hygiene case.
 
 `crash_cases` counts the failed cases that crashed rather than gave a wrong

@@ -1408,6 +1408,7 @@ def grade(solution: Path, task: str, arm: str, args: argparse.Namespace, scratch
     passed, failure, code = 0, None, None
     counts = {"adversarial_passed": 0, "adversarial_total": 0, "regressions": 0, "hygiene_failed": 0,
               "crash_cases": 0}
+    failed_cases: list[str] = []
     for case in cases:
         tier = case_tier(case)
         expected = case.with_suffix(".out").read_text(encoding="utf-8").rstrip("\n")
@@ -1420,6 +1421,7 @@ def grade(solution: Path, task: str, arm: str, args: argparse.Namespace, scratch
             counts["adversarial_passed"] += tier == ADVERSARIAL
             passed += tier != ADVERSARIAL
             continue
+        failed_cases.append(case.stem)
         kind, kind_code = classify(err, ext)
         counts["crash_cases"] += crashed(kind, returncode, driver is not None)
         counts["regressions"] += tier == REGRESSION
@@ -1427,7 +1429,7 @@ def grade(solution: Path, task: str, arm: str, args: argparse.Namespace, scratch
         if failure is None and tier != ADVERSARIAL:
             failure, code = kind, kind_code
     return {"status": "pass" if passed == main_total else "fail", "passed": passed, "total": main_total,
-            "failure": failure, "code": code, **counts, **extra}
+            "failure": failure, "code": code, **counts, "failed_cases": failed_cases, **extra}
 
 
 def crashed(kind: str, returncode: int | None, driven: bool) -> bool:
@@ -1984,7 +1986,9 @@ def main() -> int:
     print(f"results: {results}")
     failed = [row for row in read_rows(results) if row["status"] != "pass"]
     if args.agent == "reference" and failed:
-        print("reference solutions that failed: " + ", ".join(f"{row['task']}/{row['arm']}" for row in failed))
+        print("reference solutions that failed: " + ", ".join(
+            f"{row['task']}/{row['arm']} ({row['failure']}: {' '.join(row.get('failed_cases', [])) or '-'})"
+            for row in failed))
         return 1
     return 0
 

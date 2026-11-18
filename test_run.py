@@ -1936,6 +1936,7 @@ class DockerGradingTests(unittest.TestCase):
                 self.assertEqual((row["status"], row["passed"], row["total"]), ("pass", 3, 3))
                 self.assertEqual((row["adversarial_passed"], row["adversarial_total"], row["crash_cases"]), (1, 2, 1))
                 self.assertEqual((row["regressions"], row["hygiene_failed"]), (0, 0))
+                self.assertEqual(row["failed_cases"], ["adv-01"])
         # The agent's own tests are not graded (an unannotated test, a vet error in a _test.go file); mypy checks the
         # module that solution.py imports, not only solution.py.
         self.assertEqual((results["typed-python-bad"]["status"], results["typed-python-bad"]["failure"]),
