@@ -19,7 +19,8 @@ sys.path.insert(0, str(BENCH.parent))
 import run  # noqa: E402  (the runner of the evals, for the pinned Agentica)
 
 BENCH_PATHS = ["benchmarks/programs", "benchmarks/python"]
-SCALE_DEF = re.compile(r"^def scale\(\) -> Int\n  (?:return )?1\nend\n", re.MULTILINE)
+# The work size of a program: `def scale() -> Int` returning 1, in its block or its one-line form.
+SCALE_DEF = re.compile(r"^def scale\(\) -> Int(?:\n  (?:return )?1\nend| = 1)$", re.MULTILINE)
 
 
 def stage(directory: Path, names: list[str], size: int) -> None:
@@ -30,7 +31,7 @@ def stage(directory: Path, names: list[str], size: int) -> None:
         (directory / folder).mkdir()
     for name in names:
         text = (sources / "benchmarks" / "programs" / f"{name}.agc").read_text(encoding="utf-8")
-        scaled, found = SCALE_DEF.subn(f"def scale() -> Int\n  {size}\nend\n", text)
+        scaled, found = SCALE_DEF.subn(f"def scale() -> Int = {size}", text)
         if found != 1:
             raise SystemExit(f"{name}.agc has no `def scale` returning 1")
         (directory / "programs" / f"{name}.agc").write_text(scaled, encoding="utf-8")

@@ -591,6 +591,13 @@ size 1 most programs run for tens of milliseconds, so start-up weighs a lot;
 use `SIZE` for steady-state numbers. A load average above 2 is noted, as the
 numbers are then rough.
 
+The twins follow their program, not the fastest Go: an ATS is a map behind a
+lock, `Task.spawn` a goroutine, a channel a buffered channel of size 1, and a
+receive or send with a deadline a `select` on a reset timer. The ping-pong
+programs hand one value back and forth between two tasks, so they measure the
+wake-up of the other task: Agentica's scheduler and Go's runtime do it in very
+different ways, and Python's threads are far slower at it.
+
 ## Diagnostics
 
 `diagnostics.py` counts the codes the agents saw. In the `binary`
