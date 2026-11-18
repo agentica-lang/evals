@@ -617,11 +617,24 @@ the container's `/tmp`, a 1 GB tmpfs: above size 20, raise it
 (`python3 bench/run.py --tmpfs 4g ...`).
 
 The twins follow their program, not the fastest Go: an ATS is a map behind a
-lock, `Task.spawn` a goroutine, a channel a buffered channel of size 1, and a
-receive or send with a deadline a `select` on a reset timer. The ping-pong
-programs hand one value back and forth between two tasks, so they measure the
-wake-up of the other task: Agentica's scheduler and Go's runtime do it in very
-different ways, and Python's threads are far slower at it.
+lock, `Task.spawn` a goroutine, a channel a buffered channel of size 1. A
+channel call or an await with a deadline (`recv(5000)`, `Task.await(t, 60000)`)
+is a `select` on a timer that the goroutine resets for each call, with the same
+deadline as the program (5 s in `channel-pingpong`, 1 s in
+`deadline-pingpong`, 60 s in `store-clients` and in the second phase of
+`sleepers`); the Python twins pass the same timeouts to `queue`.
+
+The ping-pong programs hand one value back and forth between two tasks, so they
+measure the wake-up of the other task: Agentica's scheduler and Go's runtime do
+it in very different ways, and Python's threads are far slower at it. In Go
+the timer is most of the cost: at size 5, `deadline-pingpong` took 3.6 s, and
+the same exchange with no deadline about 0.47 s (0.40 s with `GOMAXPROCS=1`).
+The figure depends on the cost of Go's timers and of the futex calls that wake
+a goroutine on another core, so on the kernel and the number of cores.
+
+Go's `regexp` is RE2, which does not backtrack: the `(a+)+$` case of `regex`
+is a backtracking blow-up for engines that backtrack, and a short linear scan
+in Go.
 
 ## Diagnostics
 

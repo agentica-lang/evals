@@ -61,6 +61,8 @@ func binarySum(data []byte, size int) int {
 	return total
 }
 
+// fileRoundTrip writes data in 1 MiB chunks, reads it back in chunks and hashes what it reads. The Python twin joins
+// the chunks before hashing; hashing as they come gives the same digest without the copy.
 func fileRoundTrip(data []byte, path string) string {
 	const chunk = 1048576
 	file, err := os.Create(path)
@@ -68,9 +70,13 @@ func fileRoundTrip(data []byte, path string) string {
 		panic(err)
 	}
 	for at := 0; at < len(data); at += chunk {
-		file.Write(data[at:min(at+chunk, len(data))])
+		if _, err := file.Write(data[at:min(at+chunk, len(data))]); err != nil {
+			panic(err)
+		}
 	}
-	file.Close()
+	if err := file.Close(); err != nil {
+		panic(err)
+	}
 	source, err := os.Open(path)
 	if err != nil {
 		panic(err)

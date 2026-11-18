@@ -39,10 +39,18 @@ func main() {
 		for _, result := range results {
 			total += <-result
 		}
+		// Phase two: each await has a 60-second deadline, which the finished task beats.
+		timer := time.NewTimer(time.Hour)
 		for j := 0; j < 3000; j++ {
 			result := make(chan int, 1)
 			go func() { result <- quick(j) }()
-			total += <-result
+			timer.Reset(60 * time.Second)
+			select {
+			case value := <-result:
+				total += value
+			case <-timer.C:
+				total--
+			}
 		}
 	}
 	fmt.Printf("sleepers %d: checksum %d\n", rounds, total)

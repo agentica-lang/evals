@@ -16,8 +16,8 @@ func scale() int {
 	return 1
 }
 
-// receive and send wait at most a second, as the Agentica program's calls with a deadline do. Each goroutine
-// resets one timer (since Go 1.23 a reset timer delivers no stale tick) instead of making one per call.
+// receive and send wait at most a second, as the Agentica program's channel calls with a deadline do: a select on a
+// timer that each goroutine resets (since Go 1.23 a reset timer delivers no stale tick).
 func receive(from chan int, timer *time.Timer) int {
 	timer.Reset(time.Second)
 	select {
