@@ -1,4 +1,5 @@
 import http.client
+import contextlib
 import json
 import os
 import re
@@ -81,13 +82,24 @@ def stop(proc, errors):
 
 def table(database):
     try:
-        with sqlite3.connect(database) as db:
+        with contextlib.closing(sqlite3.connect(database, timeout=0)) as db:
             customers = db.execute("select id, name from customers order by id").fetchall()
             orders = db.execute("select id, customer_id, item, quantity, cents from orders order by id").fetchall()
     except sqlite3.Error as exc:
         return f"table: error {exc}"
     return (f"customers: {json.dumps(customers, separators=(',', ':'))}\n"
             f"orders: {json.dumps(orders, separators=(',', ':'))}")
+
+
+def outside(database, statement):
+    """Runs a statement on the file as another program would. It does not wait for a lock (timeout 0): a service
+    commits each change before it answers, so the file is never locked between requests."""
+    try:
+        with contextlib.closing(sqlite3.connect(database, timeout=0, isolation_level=None)) as db:
+            db.execute(statement)
+    except sqlite3.Error as exc:
+        return f"sql: error {exc}"
+    return "sql: ok"
 
 
 def main():
@@ -108,10 +120,7 @@ def main():
             elif line == "TABLE":
                 print(table(database))
             elif line.startswith("SQL "):
-                with sqlite3.connect(database) as db:
-                    db.execute(line[4:])
-                db.close()
-                print("sql: ok")
+                print(outside(database, line[4:]))
             else:
                 print(request(port, line))
         stop(proc, errors)

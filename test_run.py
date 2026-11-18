@@ -7,6 +7,7 @@ import os
 import random
 import shutil
 import subprocess
+import sys
 import tarfile
 import tempfile
 import unittest
@@ -250,6 +251,45 @@ class SupplyChainTests(unittest.TestCase):
                                 "agentica_binary_sha256": hashlib.sha256(b"binary").hexdigest(),
                                 "agentica_override": True, "agentica_src_override": False})
         self.assertEqual((unused["agentica_version"], unused["agentica_binary_sha256"]), (None, None))
+
+
+class TaskFaultTests(unittest.TestCase):
+    """Each fault of the t22 start, put back into the Python reference one at a time, fails a hidden case: the cases
+    see every fault the task asks to fix."""
+
+    FAULTS = {
+        "201 answered as 200": ("self.send_json(201, order(", "self.send_json(200, order("),
+        "a quantity of 0": ('whole(body.get("quantity"), 1)', 'whole(body.get("quantity"), 0)'),
+        "a decimal accepted": ("return type(value) is int and value >= least",
+                               "return isinstance(value, (int, float)) and not isinstance(value, bool) "
+                               "and value >= least"),
+        "SQL built from text": ('db.execute("select id from customers where name = ?", (body["customer"],))',
+                                "db.execute(f\"select id from customers where name = '{body['customer']}'\")"),
+        "totals without the quantity": ("sum(row[3] * row[4] for row in rows)", "sum(row[4] for row in rows)"),
+        "the report by name": ("order by total desc, c.name", "order by c.name"),
+    }
+
+    def failing_cases(self, source: str) -> list[str]:
+        task = run.TASKS / "t22-orders-api"
+        with tempfile.TemporaryDirectory() as directory:
+            program = Path(directory) / "solution.py"
+            program.write_text(source, encoding="utf-8")
+            failing = []
+            for case in sorted((task / "hidden").glob("*.in")):
+                done = subprocess.run([sys.executable, "-I", str(task / "hidden" / "driver.py"),
+                                       case.read_text(encoding="utf-8"), sys.executable, "-I", str(program)],
+                                      capture_output=True, text=True, timeout=120)
+                if done.stdout != case.with_suffix(".out").read_text(encoding="utf-8"):
+                    failing.append(case.stem)
+        return failing
+
+    def test_every_fault_of_the_t22_start_fails_a_case(self) -> None:
+        reference = (run.TASKS / "t22-orders-api" / "reference.py").read_text(encoding="utf-8")
+        self.assertEqual(self.failing_cases(reference), [])
+        for fault, (right, wrong) in self.FAULTS.items():
+            with self.subTest(fault=fault):
+                self.assertEqual(reference.count(right), 1)
+                self.assertNotEqual(self.failing_cases(reference.replace(right, wrong)), [])
 
 
 class PrepareTests(unittest.TestCase):
