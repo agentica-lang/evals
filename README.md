@@ -559,6 +559,45 @@ cross-arm aggregate, as a streaming probe: it shows whether an agent finds the
 streaming calls of its language, not how well it programs in general, and a
 Python solution that ignores the instruction still passes.
 
+### Tree tasks and case tiers
+
+A tree task's solution spans several files. The task has `reference/<ext>/`
+(`agc`, `py`, `go`) instead of `reference.<ext>`, each a whole tree with its
+entry point `solution.<ext>`, and may have `start/<ext>/`, a tree the
+workspace starts from (the program to change). The solution is
+`solution.<ext>` and every other file of the arm's language in the workspace,
+outside `bin/`, `skills/`, `deps/`, `docs/`, `examples/`, `start/`, hidden
+folders and links (at most 200 files); the grader copies them all, and the run
+keeps them under `solution/`.
+
+- Python runs as `python3 -s -E solution.py`, so it imports its own modules;
+  the typed arm checks every file with `mypy --strict --explicit-package-bases`.
+- Go is the module `solution`: package main in the root, other packages in
+  subfolders (`solution/<folder>`), checked with `go vet ./...` and
+  `go build .`.
+- Agentica imports its files by relative path.
+- An edit of any `.agc`, `.py` or `.go` file counts for `fix_rounds`.
+- `agent_timeout` in the task folder raises `--timeout` for that task.
+- An `ecosystem` file in the task folder makes it an ecosystem task (see "The
+  ecosystem tasks") without a start that imports a package.
+
+A hidden case's name prefix puts it in a tier, in any task:
+
+| prefix | tier | in the status? | counted as |
+|---|---|---|---|
+| `adv-` | adversarial: malformed input, faults, edge values | no | `adversarial_passed` of `adversarial_total` |
+| `reg-` | regression: old behaviour a change must keep | yes | `regressions` (failed cases) |
+| `hyg-` | hygiene: shutdown, leaks, exit code | yes | `hygiene_failed` |
+| none | main | yes | `passed` of `total` |
+
+`passed` and `total` leave the adversarial cases out. `crash_cases` counts the
+failed cases of any tier that ended in a crash (a traceback, `panic:`,
+`fatal error:` or a `RUNTIME-` error) rather than a wrong answer. A run whose
+cases did not run (no file, or a failed check) fails every regression and
+hygiene case. `spec_runs` counts `agentica test`, `python3 -m unittest`
+(or `pytest`) and `go test` calls. `summary.md` adds a table per arm with
+these, the share of cases passed and the spend per passing run.
+
 ### Before a round
 
 - Network access for the agents. Agent containers can reach the provider, so

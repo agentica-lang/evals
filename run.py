@@ -123,12 +123,21 @@ done
 exec "$here/@REAL@" "$@"
 """.replace("@LOG@", REFUSED_LOG).replace("@REAL@", REAL_BINARY)
 # What the skill copy of the skill-nocli arm must not name any more.
+SPEC_COMMAND = re.compile(COMMAND_PREFIX + r"(?:(?:\S*/)?agentica(?:-real)?\s+test\b|python3?\s+-m\s+(?:unittest|pytest)\b|"
+                          + GO + r"test\b)")
 QUERY_MENTION = re.compile(r"queries\.md|analysis\.md|QUERY-|std/analysis|`type-at`|agentica\s+(?:outline|type-at|symbol|refs)\b")
 TYPE_SILENCE = re.compile(r"#\s*mypy:|#\s*type:\s*ignore")
 TYPE_ESCAPE = re.compile(r"\bAny\b|\bcast\(|\bno_type_check\b|\bTYPE_CHECKING\b")
 MISSING_COMMAND = (126, 127)
 AGENT_NETWORK = True
 CASE_TIMEOUT = 10
+# A tree task's solution is every file of the arm's language in the workspace, outside these folders.
+TREE_SKIP = {"bin", "skills", "deps", "docs", "examples", "start"}
+TREE_LIMIT = 200
+GO_TREE_VET = ["go", "vet", "./..."]
+GO_TREE_BUILD = ["go", "build", "-gcflags=-e", "-o", "solution", "."]
+# Hidden case tiers, by file name prefix: adversarial cases are reported apart and do not decide the status.
+ADVERSARIAL, REGRESSION, HYGIENE = "adv-", "reg-", "hyg-"
 WRITE_LOCK = threading.Lock()
 WORKSPACE = Path("/workspace")
 SYSTEM_PATH = "/usr/local/bin:/usr/bin:/bin"
@@ -265,9 +274,10 @@ def go_mod(ecosystem: bool = False) -> str:
 
 def ecosystem_task(task: str) -> bool:
     """A task built on packages: Bond and agentica-db in Agentica, modernc.org/sqlite in Go (its start imports a
-    package)."""
+    package, or the task has an `ecosystem` file)."""
     start = TASKS / task / "start.agc"
-    return start.is_file() and 'from "pkg/' in start.read_text(encoding="utf-8")
+    return (TASKS / task / "ecosystem").is_file() or (
+        start.is_file() and 'from "pkg/' in start.read_text(encoding="utf-8"))
 
 
 # The installed packages of ecosystem/agentica.lock, set by ecosystem_deps.
@@ -324,9 +334,42 @@ def start_file(task: str, arm: str) -> Path:
     return TASKS / task / f"start.{ext}"
 
 
+def tree_task(task: str) -> bool:
+    """A task whose solution spans several files: its references are trees under reference/<ext>/, and its start,
+    when it has one, is a tree under start/<ext>/ that the workspace starts from."""
+    return (TASKS / task / "reference").is_dir()
+
+
+def has_reference(task: str, ext: str) -> bool:
+    return (TASKS / task / "reference" / ext).is_dir() if tree_task(task) else (TASKS / task / f"reference.{ext}").is_file()
+
+
+def agent_timeout(task: str, default: int) -> int:
+    """The agent's time limit: a task's agent_timeout file raises the --timeout of the round for that task."""
+    limit = TASKS / task / "agent_timeout"
+    return max(default, int(limit.read_text(encoding="utf-8").strip())) if limit.is_file() else default
+
+
+def solution_files(work: Path, ext: str) -> list[Path]:
+    """The source files of a tree solution, relative to the workspace, without links and outside TREE_SKIP; at most
+    TREE_LIMIT of them."""
+    found = []
+    for path in sorted(work.rglob(f"*.{ext}")):
+        relative = path.relative_to(work)
+        if relative.parts[0] in TREE_SKIP or any(part.startswith(".") for part in relative.parts):
+            continue
+        if path.is_symlink() or not path.is_file() or any(parent.is_symlink() for parent in path.parents):
+            continue
+        found.append(relative)
+    return found[:TREE_LIMIT]
+
+
 def prepare(work: Path, task: str, arm: str) -> None:
     ext = ARMS[arm]
     work.mkdir(parents=True, exist_ok=True)
+    start_tree = TASKS / task / "start" / ext
+    if tree_task(task) and start_tree.is_dir():
+        shutil.copytree(start_tree, work, dirs_exist_ok=True)
     shutil.copy(TASKS / task / "task.md", work / "task.md")
     go_note = TASKS / task / "task.go.md"
     if ext == "go" and go_note.is_file():
@@ -426,11 +469,43 @@ def refused_queries(work: Path) -> int:
     return len(log.read_text(encoding="utf-8", errors="replace").splitlines()) if log.is_file() else 0
 
 
-def prompt(work: Path, arm: str) -> str:
+def tree_prompt(work: Path, arm: str) -> str:
+    """The prompt of a tree task: the program is solution.<ext> and any other files of its language in the
+    workspace."""
+    ext = ARMS[arm]
+    if ext == "agc":
+        text = ("The program starts at solution.agc and may import other .agc files of this directory and its "
+                "subfolders. Run programs with the `agentica` command, which is on your PATH.")
+        if (work / "agentica.lock").exists():
+            text += (f" The packages in deps/ are documented in docs/agentica-db/ (agentica-db) and at {BOND_DOCS} "
+                     "(Bond).")
+        return text + (" Use the agentica-programming skill." if arm in SKILL_ARMS else "")
+    if ext == "go":
+        modules = ("the standard library and modernc.org/sqlite (a database/sql driver named \"sqlite\"), which go.mod "
+                   "and go.sum already require" if (work / "go.sum").exists() else "the standard library only")
+        return (f"The program is a Go module named `solution` (go.mod is ready) with {modules}: package "
+                "main is solution.go and any other .go files of this directory; other packages go in subfolders, "
+                "imported as `solution/<folder>`. The checkers are `go vet ./...` and `go build .`, on your PATH: the "
+                "solution must pass both, so do not silence them.")
+    text = ("The program is a Python 3 program that starts at solution.py and may import other .py files of this "
+            "directory and its packages (a subfolder with __init__.py). Run programs with `python3`.")
+    if arm in TYPED_ARMS:
+        text += (" Type annotations go on every function. The type checker is `mypy --strict "
+                 "--explicit-package-bases solution.py`, on your PATH, and it checks every .py file: the solution must "
+                 "pass it, so do not silence it with `# type: ignore` or by weakening its options.")
+    return text
+
+
+def prompt(work: Path, arm: str, tree: bool = False) -> str:
     ext = ARMS[arm]
     lines = ["Read task.md in the current directory and do what it asks."]
     if (work / f"start.{ext}").exists():
         lines.append(f"The starting program is start.{ext}.")
+    if tree:
+        lines.append(tree_prompt(work, arm))
+        lines.append("Work only inside the current directory. Test your program before you finish, then reply with "
+                     "one sentence.")
+        return " ".join(lines)
     if ext == "agc":
         lines.append("Write a complete Agentica program to solution.agc. Run programs with the `agentica` command, which is on your PATH.")
         if arm in SKILL_ARMS:
@@ -818,8 +893,12 @@ def run_agent(
     """The agent's redacted stdout and stderr, whether it timed out, and its exit status."""
     ext = ARMS[arm]
     if agent == "reference":
-        shutil.copy(TASKS / task / f"reference.{ext}", work / f"solution.{ext}")
+        if tree_task(task):
+            shutil.copytree(TASKS / task / "reference" / ext, work, dirs_exist_ok=True)
+        else:
+            shutil.copy(TASKS / task / f"reference.{ext}", work / f"solution.{ext}")
         return "", "", False, 0
+    text = text or prompt(work, arm, tree_task(task))
     env = child_environment(pass_env, in_chroot=True, workspace=work)
     command = agent_command(agent, work, arm, model, in_chroot=True, text=text)
     container = f"agentica-agent-{uuid.uuid4().hex}"
@@ -926,9 +1005,11 @@ def runs_program(command: str) -> bool:
     return any(RUN_COMMAND.match(part) for part in command_parts(command))
 
 
-def edits_solution(call: "Call") -> bool:
-    path = str(call.args.get("path") or call.args.get("file_path") or "")
-    return call.tool in EDIT_TOOLS and not call.failed and Path(path).name.startswith("solution.")
+def edits_solution(call: "Call", tree: bool = False) -> bool:
+    """An edit of the solution: solution.<ext>, or in a tree task any .agc, .py or .go file."""
+    path = Path(str(call.args.get("path") or call.args.get("file_path") or ""))
+    source = path.name.startswith("solution.") or (tree and path.suffix in (".agc", ".py", ".go"))
+    return call.tool in EDIT_TOOLS and not call.failed and source
 
 
 def writes_solution(command: str) -> bool:
@@ -974,7 +1055,7 @@ class Call:
     failed: bool = False
 
 
-def call_metrics(calls: list[Call]) -> dict[str, int]:
+def call_metrics(calls: list[Call], tree: bool = False) -> dict[str, int]:
     """The counters of a run from its tool calls, in order.
 
     A fix round is a failed check or run call followed by an edit (an edit tool, or a shell command that writes the
@@ -984,7 +1065,7 @@ def call_metrics(calls: list[Call]) -> dict[str, int]:
     A `go vet` and a `go build` in calls next to each other, in either order (no edit or other run between), are
     one check: one interpreter run, one check run, and one failure at most."""
     m = {"interpreter_runs": 0, "failing_runs": 0, "check_runs": 0, "check_failures": 0, "fix_rounds": 0,
-         "outside_reads": 0, "net_commands": 0, "query_runs": 0, "read_runs": 0}
+         "outside_reads": 0, "net_commands": 0, "query_runs": 0, "read_runs": 0, "spec_runs": 0}
     awaiting_fix = False
     binaries: set[str] = set()
     open_half: tuple[str, bool] | None = None  # the `vet` or `build` call waiting for its other half, and its result
@@ -995,13 +1076,14 @@ def call_metrics(calls: list[Call]) -> dict[str, int]:
         m["net_commands"] += is_net_command(command)
         if call.tool == "read":
             m["read_runs"] += 1
-        elif edits_solution(call) or writes_solution(command):
+        elif edits_solution(call, tree) or writes_solution(command):
             m["fix_rounds"] += awaiting_fix
             awaiting_fix = False
             open_half = None
         if not command:
             continue
         m["query_runs"] += is_query_command(command)
+        m["spec_runs"] += any(SPEC_COMMAND.match(part) for part in command_parts(command))
         m["read_runs"] += is_read_command(command)
         binary = runs_binary(command, binaries)
         if runs_program(command) or binary:
@@ -1027,7 +1109,7 @@ def call_metrics(calls: list[Call]) -> dict[str, int]:
     return m
 
 
-def pi_metrics(out: str) -> dict[str, int | float]:
+def pi_metrics(out: str, tree: bool = False) -> dict[str, int | float]:
     """Counters from Pi's JSON stream: usage from the `message_end` events of the assistant, calls from the
     `tool_execution_start` and `_end` events.
 
@@ -1060,7 +1142,7 @@ def pi_metrics(out: str) -> dict[str, int | float]:
             call = calls[open_calls[str(event.get("toolCallId", ""))].pop(0)]
             call.output = result_text(event.get("result", {}))
             call.failed = bool(event.get("isError"))
-    return {**m, **call_metrics(calls)}
+    return {**m, **call_metrics(calls, tree)}
 
 
 def result_text(result: object) -> str:
@@ -1121,13 +1203,15 @@ def case_timeout(task: str) -> int:
     return int(limit.read_text(encoding="utf-8").strip()) if limit.is_file() else CASE_TIMEOUT
 
 
-def case_invocation(ext: str, driver: str | None, case: str) -> tuple[list[str], str]:
+def case_invocation(ext: str, driver: str | None, case: str, tree: bool = False) -> tuple[list[str], str]:
+    """The command of one hidden case. A tree solution in Python imports its own modules, so it runs with the script's
+    folder on sys.path (-s -E, not -I)."""
     if ext == "go":
         return (["/workspace/solution"], case) if driver is None else (["python3", "-I", "-", case, "/workspace/solution"], driver)
     if ext == "agc":
         command = ["/workspace/bin/agentica", "solution.agc"]
     else:
-        command = ["python3", "-I", "solution.py"]
+        command = ["python3", "-s", "-E", "solution.py"] if tree else ["python3", "-I", "solution.py"]
     if driver is None:
         return command, case
     return ["python3", "-I", "-", case, command[0], *command[1:-1], f"/workspace/{command[-1]}"], driver
@@ -1164,8 +1248,10 @@ def type_escapes(text: str) -> dict[str, int]:
     return {"type_ignores": len(TYPE_SILENCE.findall(text)), "type_escapes": len(TYPE_ESCAPE.findall(text))}
 
 
-def type_check(contained: Contained, total: int) -> dict | None:
-    out, err, returncode = contained(CHECKER + ["solution.py"], "", CHECK_TIMEOUT)
+def type_check(contained: Contained, total: int, files: list[str] | None = None) -> dict | None:
+    """mypy on solution.py, or on every file of a tree solution (with the workspace as the base of its packages)."""
+    command = CHECKER + (["--explicit-package-bases", *files] if files else ["solution.py"])
+    out, err, returncode = contained(command, "", CHECK_TIMEOUT)
     if returncode == 0:
         return None
     if out is None:
@@ -1181,18 +1267,18 @@ def go_failure(step: str, text: str, total: int) -> dict:
             "check_errors": len(GO_FILE_ERROR.findall(text))}
 
 
-def go_check(contained: Contained, built: Contained, total: int) -> dict | None:
+def go_check(contained: Contained, built: Contained, total: int, tree: bool = False) -> dict | None:
     """`go vet`, then `go build` into the workspace; None when both pass, else the failing row.
 
     `go vet` type-checks first and stops at the first type or syntax error (its `vet: ` line); then the class and
     the count come from `go build -gcflags=-e`, which lists them all. A vet failure records `build_ok`, so a
     failure of vet's other analyses alone (the build passes) shows."""
-    out, err, returncode = contained(GO_VET, "", CHECK_TIMEOUT)
+    out, err, returncode = contained(GO_TREE_VET if tree else GO_VET, "", CHECK_TIMEOUT)
     if out is None:
         return {"status": "fail", "passed": 0, "total": total, "failure": "check-timeout", "code": "vet",
                 "check_errors": 0}
     vet_text = out + err if returncode != 0 else ""
-    build_out, build_err, build_code = built(GO_BUILD, "", CHECK_TIMEOUT)
+    build_out, build_err, build_code = built(GO_TREE_BUILD if tree else GO_BUILD, "", CHECK_TIMEOUT)
     if build_out is None:
         return {"status": "fail", "passed": 0, "total": total, "failure": "check-timeout", "code": "build",
                 "check_errors": 0}
@@ -1202,16 +1288,34 @@ def go_check(contained: Contained, built: Contained, total: int) -> dict | None:
     return {**go_failure("vet", build_out + build_err if typed else vet_text, total), "build_ok": build_code == 0}
 
 
+def case_tier(case: Path) -> str:
+    for tier in (ADVERSARIAL, REGRESSION, HYGIENE):
+        if case.name.startswith(tier):
+            return tier
+    return ""
+
+
 def grade(solution: Path, task: str, arm: str, args: argparse.Namespace, scratch: Path, name: str) -> dict:
+    """The outcome of a solution on the hidden cases. `solution` is solution.<ext>; for a tree task, every file of its
+    language in that workspace goes along (solution_files).
+
+    The status and `passed`/`total` cover every case but the adversarial ones (`adv-*`), which count apart
+    (`adversarial_passed` of `adversarial_total`). `regressions` and `hygiene_failed` count the failed `reg-*` and
+    `hyg-*` cases, and `crash_cases` the failed cases of any tier whose stderr shows a crash (classify: `runtime`)."""
     ext = ARMS[arm]
+    tree = tree_task(task)
     cases = sorted((TASKS / task / "hidden").glob("*.in"))
+    main_total = sum(case_tier(case) != ADVERSARIAL for case in cases)
     if solution.is_symlink() or not solution.is_file():
-        return {"status": "no-file", "passed": 0, "total": len(cases), "failure": None, "code": None}
+        return {"status": "no-file", "passed": 0, "total": main_total, "failure": None, "code": None}
     grade_root = (clone_rootfs(args.chroot_root, scratch / f"{name}-grader-root")
                   if args.sandbox == "firejail" else scratch / f"{name}-grader-root")
     work = grade_root / WORKSPACE.relative_to("/")
     work.mkdir(parents=True)
-    shutil.copyfile(solution, work / solution.name)
+    files = solution_files(solution.parent, ext) if tree else [Path(solution.name)]
+    for relative in files:
+        (work / relative).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(solution.parent / relative, work / relative)
     if ext == "agc":
         shutil.copytree(RUNTIME, work, dirs_exist_ok=True)
     project_files(work, task, ext)
@@ -1224,34 +1328,45 @@ def grade(solution: Path, task: str, arm: str, args: argparse.Namespace, scratch
 
     extra: dict[str, int] = {}
     if arm in TYPED_ARMS:
-        extra = type_escapes(solution.read_text(encoding="utf-8", errors="replace"))
+        extra = type_escapes("\n".join((work / relative).read_text(encoding="utf-8", errors="replace")
+                                       for relative in files))
         if extra["type_ignores"]:
-            return {"status": "fail", "passed": 0, "total": len(cases), "failure": "check", "code": "ignore",
+            return {"status": "fail", "passed": 0, "total": main_total, "failure": "check", "code": "ignore",
                     "check_errors": 0, **extra}
-        found = type_check(contained, len(cases))
+        found = type_check(contained, main_total, [str(relative) for relative in files] if tree else None)
         if found is not None:
             return {**found, **extra}
         extra["check_errors"] = 0
     if ext == "go":
-        found = go_check(contained, built, len(cases))
+        found = go_check(contained, built, main_total, tree)
         if found is not None:
             return found
         extra["check_errors"] = 0
     driver = hidden_driver(task)
     timeout = case_timeout(task)
     passed, failure, code = 0, None, None
+    counts = {"adversarial_passed": 0, "adversarial_total": 0, "regressions": 0, "hygiene_failed": 0,
+              "crash_cases": 0}
     for case in cases:
+        tier = case_tier(case)
         expected = case.with_suffix(".out").read_text(encoding="utf-8").rstrip("\n")
-        command, stdin = case_invocation(ext, driver, case.read_bytes().decode("utf-8"))
+        command, stdin = case_invocation(ext, driver, case.read_bytes().decode("utf-8"), tree)
         out, err, returncode = contained(command, stdin, timeout)
         actual = None if out is None else out.rstrip("\n")
-        if actual == expected and returncode == 0:
-            passed += 1
+        ok = actual == expected and returncode == 0
+        counts["adversarial_total"] += tier == ADVERSARIAL
+        if ok:
+            counts["adversarial_passed"] += tier == ADVERSARIAL
+            passed += tier != ADVERSARIAL
             continue
-        if failure is None:
-            failure, code = classify(err, ext)
-    return {"status": "pass" if passed == len(cases) else "fail", "passed": passed, "total": len(cases),
-            "failure": failure, "code": code, **extra}
+        kind, kind_code = classify(err, ext)
+        counts["crash_cases"] += kind == "runtime"
+        counts["regressions"] += tier == REGRESSION
+        counts["hygiene_failed"] += tier == HYGIENE
+        if failure is None and tier != ADVERSARIAL:
+            failure, code = kind, kind_code
+    return {"status": "pass" if passed == main_total else "fail", "passed": passed, "total": main_total,
+            "failure": failure, "code": code, **counts, **extra}
 
 
 def classify(err: str, ext: str) -> tuple[str, str | None]:
@@ -1274,6 +1389,14 @@ def classify(err: str, ext: str) -> tuple[str, str | None]:
     return "logic", None
 
 
+def case_counts(task: str) -> dict[str, int]:
+    """The tier counters of a run whose cases did not run (no file, or a failed check): every regression and hygiene
+    case failed, and none passed or crashed."""
+    tiers = Counter(case_tier(case) for case in (TASKS / task / "hidden").glob("*.in"))
+    return {"adversarial_passed": 0, "adversarial_total": tiers[ADVERSARIAL], "regressions": tiers[REGRESSION],
+            "hygiene_failed": tiers[HYGIENE], "crash_cases": 0}
+
+
 def one_run(args: argparse.Namespace, results: Path, scratch: Path, task: str, arm: str, rep: int) -> dict:
     name = f"{task}-{arm}-{rep}"
     agent_root = (clone_rootfs(args.chroot_root, scratch / f"{name}-agent-root")
@@ -1282,21 +1405,23 @@ def one_run(args: argparse.Namespace, results: Path, scratch: Path, task: str, a
     prepare(work, task, arm)
     (agent_root / "home" / "agent").mkdir(parents=True, exist_ok=True)
     began = time.time()
+    tree = tree_task(task)
     out, err, timed_out, _ = run_agent(
-        args.agent, work, agent_root, task, arm, args.model, args.timeout, args.sandbox, args.pass_env, args.image,
-        args.pi_auth,
+        args.agent, work, agent_root, task, arm, args.model, agent_timeout(task, args.timeout), args.sandbox,
+        args.pass_env, args.image, args.pi_auth,
     )
     seconds = round(time.time() - began, 1)
     row = {"task": task, "arm": arm, "rep": rep, "agent": args.agent, "model": args.model or "default",
            "seconds": seconds, "agent_timeout": timed_out, "sandbox": args.sandbox, "image": args.image}
     if args.agent == "pi":
-        row.update(pi_metrics(out))
+        row.update(pi_metrics(out, tree))
     elif args.agent == "claude":
         row.update(claude_metrics(out))
     row.update(spend(row))
     row["refused_queries"] = refused_queries(work)
     solution = work / f"solution.{ARMS[arm]}"
     row.update(grade(solution, task, arm, args, scratch, name))
+    row = {**case_counts(task), **row}
     if timed_out:
         # The cost counts the turns Pi finished; a request still open when it was killed never reports one.
         row.update(status="timeout", failure="agent-timeout", code=None, cost_source=f"{row['cost_source']}-partial")
@@ -1304,8 +1429,13 @@ def one_run(args: argparse.Namespace, results: Path, scratch: Path, task: str, a
     run_dir.mkdir(parents=True)
     (run_dir / "agent.jsonl").write_text(out, encoding="utf-8")
     (run_dir / "agent.stderr").write_text(err, encoding="utf-8")
-    if copy_candidate(solution, run_dir / solution.name):
-        redact_file(run_dir / solution.name, args.pass_env, auth_secrets(args.pi_auth))
+    kept = [Path(solution.name)] if not tree else [Path("solution") / relative for relative in
+                                                   solution_files(work, ARMS[arm])]
+    for relative in kept:
+        source = work / relative.relative_to("solution") if tree else solution
+        (run_dir / relative).parent.mkdir(parents=True, exist_ok=True)
+        if copy_candidate(source, run_dir / relative):
+            redact_file(run_dir / relative, args.pass_env, auth_secrets(args.pi_auth))
     with WRITE_LOCK:
         with (results / "results.jsonl").open("a") as handle:
             handle.write(json.dumps(row) + "\n")
@@ -1468,29 +1598,34 @@ def run_info(args: argparse.Namespace, image_info: dict[str, str | None], agenti
 
 
 def start_outcome(args: argparse.Namespace, scratch: Path, task: str, arm: str) -> tuple:
-    start = start_file(task, arm)
     work = scratch / f"{task}-{arm}-start"
     work.mkdir()
     solution = work / f"solution.{ARMS[arm]}"
-    shutil.copyfile(start, solution)
+    if tree_task(task):
+        shutil.copytree(TASKS / task / "start" / ARMS[arm], work, dirs_exist_ok=True)
+    else:
+        shutil.copyfile(start_file(task, arm), solution)
     row = grade(solution, task, arm, args, scratch, f"{task}-{arm}-start")
     return row["status"], row["passed"], row["failure"]
 
 
 def check_starts(args: argparse.Namespace) -> int:
-    """Each start.go must grade like the typed Python start: the same status, passed cases and failure kind."""
-    tasks = [task for task in args.tasks if (TASKS / task / "start.go").is_file()]
+    """Each start.go must grade like the typed Python start: the same status, passed cases and failure kind. A tree
+    task's start trees (start/<ext>/) must grade alike in all three languages."""
+    tasks = [task for task in args.tasks if (TASKS / task / "start.go").is_file() or (TASKS / task / "start" / "go").is_dir()]
+    arms = {task: ("typed-python", "go", "binary") if tree_task(task) else ("typed-python", "go") for task in tasks}
     with tempfile.TemporaryDirectory(prefix="agentica-eval-starts-") as directory, \
             ThreadPoolExecutor(max_workers=args.jobs) as pool:
         scratch = Path(directory)
         futures = {(task, arm): pool.submit(start_outcome, args, scratch, task, arm)
-                   for task in tasks for arm in ("typed-python", "go")}
+                   for task in tasks for arm in arms[task]}
         outcomes = {key: future.result() for key, future in futures.items()}
     differ = []
     for task in tasks:
-        python, go = outcomes[task, "typed-python"], outcomes[task, "go"]
-        print(f"{task}: python {python}, go {go}{'' if python == go else '  DIFFER'}")
-        if python != go:
+        found = {arm: outcomes[task, arm] for arm in arms[task]}
+        same = len(set(found.values())) == 1
+        print(f"{task}: " + ", ".join(f"{arm} {outcome}" for arm, outcome in found.items()) + ("" if same else "  DIFFER"))
+        if not same:
             differ.append(task)
     if differ:
         print("starts that differ: " + ", ".join(differ))
@@ -1567,6 +1702,7 @@ def arm_totals(rows: list[dict]) -> list[str]:
                             sorted(Counter(r.get("cost_source", "-") for r in rs).items()))
         out.append(f"| {arm} | {len(rs)} | {sum(r['status'] == 'pass' for r in rs)}/{len(rs)} | {total} | "
                    f"{mean_known(rs, ('cost',), 4)} | {mean_known(rs, ('fix_rounds',), 2)} | {sources} |")
+    out += ["", *quality_totals(arms)]
     out.append("")
     for arm, rs in sorted(by_arm.items()):
         out.append(f"{arm} tasks: {' '.join(sorted({row['task'] for row in rs}))}")
@@ -1574,6 +1710,28 @@ def arm_totals(rows: list[dict]) -> list[str]:
     if go:
         out.append(f"go runs that failed go vet alone (the build passed): {sum(bool(r.get('build_ok')) for r in go)} "
                    f"of {len(go)}")
+    return out
+
+
+def summed(rows: list[dict], key: str) -> str:
+    return "-" if any(key not in row for row in rows) else str(sum(row[key] for row in rows))
+
+
+def quality_totals(arms: dict[str, list[dict]]) -> list[str]:
+    """Beyond pass or fail, per arm over the same tasks: the share of main cases passed, the adversarial cases passed,
+    the failed cases that crashed, the regression and hygiene cases failed, the spec runs, and the spend per passing
+    run (`-` when no run passed). Rows from before a field existed make it unknown (`-`)."""
+    out = ["| arm | cases passed | adversarial | crash cases | regressions | hygiene failed | spec runs | $ per pass |",
+           "|---|---|---|---|---|---|---|---|"]
+    for arm, rs in sorted(arms.items()):
+        passed, total = sum(r["passed"] for r in rs), sum(r["total"] for r in rs)
+        cases = f"{passed}/{total}" if total else "-"
+        adversarial = ("-" if any("adversarial_total" not in r for r in rs) else
+                       f"{sum(r['adversarial_passed'] for r in rs)}/{sum(r['adversarial_total'] for r in rs)}")
+        passes = sum(r["status"] == "pass" for r in rs)
+        per_pass = "-" if not passes or any("cost" not in r for r in rs) else f"{sum(r['cost'] for r in rs) / passes:.4f}"
+        out.append(f"| {arm} | {cases} | {adversarial} | {summed(rs, 'crash_cases')} | {summed(rs, 'regressions')} | "
+                   f"{summed(rs, 'hygiene_failed')} | {summed(rs, 'spec_runs')} | {per_pass} |")
     return out
 
 
@@ -1621,7 +1779,7 @@ def limit_go_tasks(arms: list[str], tasks: list[str], arm_tasks: dict[str, list[
     if "go" not in arms:
         return arm_tasks
     chosen = arm_tasks.get("go", tasks)
-    available = [task for task in chosen if (TASKS / task / "reference.go").is_file()]
+    available = [task for task in chosen if has_reference(task, "go")]
     skipped = [task for task in chosen if task not in available]
     if skipped:
         print(f"go: not available in Go yet (no reference.go), skipped: {' '.join(skipped)}", flush=True)
@@ -1681,12 +1839,13 @@ def main() -> int:
         args.agent = "reference"
         args.pass_env = []
     if args.check_starts:
-        args.arms = ["typed-python", "go"]
+        trees = any(tree_task(task) and (TASKS / task / "start").is_dir() for task in args.tasks)
+        args.arms = ["typed-python", "go", *(["binary"] if trees else [])]
     args.arms = args.arms or (REFERENCE_ARMS if args.check_references else DEFAULT_ARMS)
     args.arm_tasks = limit_go_tasks(args.arms, args.tasks, parse_arm_tasks(args.arm_tasks, args.arms, args.tasks))
     if not args.check_starts and not run_order(args.tasks, args.arms, args.arm_tasks, 1):
         raise SystemExit("nothing to run: every selected task is skipped by every selected arm "
-                         "(the go arm runs only the tasks with a reference.go)")
+                         "(the go arm runs only the tasks with a Go reference)")
     if args.max_cost is not None and args.max_cost <= 0:
         raise SystemExit("--max-cost must be more than 0")
     if args.agent == "reference":

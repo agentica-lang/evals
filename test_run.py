@@ -933,6 +933,82 @@ class AgentTimeoutTests(unittest.TestCase):
         self.assertEqual(saved, row)
 
 
+class TreeTaskTests(unittest.TestCase):
+    def test_a_tree_solution_is_the_source_files_outside_the_tool_folders_and_links(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            work = Path(directory)
+            for name in ("solution.py", "lib/money.py", "tests/test_money.py", "skills/x/tool.py", "bin/run.py",
+                         "deps/pkg/a.py", ".hidden/b.py", "notes.md", "solution.agc"):
+                (work / name).parent.mkdir(parents=True, exist_ok=True)
+                (work / name).write_text("", encoding="utf-8")
+            (work / "linked.py").symlink_to(work / "solution.py")
+            (work / "linked-dir").symlink_to(work / "lib")
+            self.assertEqual(run.solution_files(work, "py"),
+                             [Path("lib/money.py"), Path("solution.py"), Path("tests/test_money.py")])
+
+    def test_a_task_agent_timeout_only_raises_the_rounds_timeout(self) -> None:
+        with tempfile.TemporaryDirectory() as directory, patch.object(run, "TASKS", Path(directory)):
+            (Path(directory) / "big").mkdir()
+            (Path(directory) / "big" / "agent_timeout").write_text("2400\n", encoding="utf-8")
+            (Path(directory) / "small").mkdir()
+            self.assertEqual((run.agent_timeout("big", 600), run.agent_timeout("big", 3000)), (2400, 3000))
+            self.assertEqual(run.agent_timeout("small", 600), 600)
+
+    def test_spec_runs_and_edits_of_any_source_file_count_in_a_tree_task(self) -> None:
+        calls = [run.Call("bash", {"command": "cd /workspace && agentica test tests/"}, "error[CHECK-TYPE-MISMATCH]"),
+                 run.Call("edit", {"path": "lib/money.agc"}),
+                 run.Call("bash", {"command": "python3 -m unittest discover"}, "OK"),
+                 run.Call("bash", {"command": "go test ./..."}, "ok"),
+                 run.Call("bash", {"command": "agentica solution.agc"}, "ok")]
+        self.assertEqual(run.call_metrics(calls, tree=True)["spec_runs"], 3)
+        self.assertEqual(run.call_metrics(calls, tree=True)["fix_rounds"], 1)
+        self.assertEqual(run.call_metrics(calls)["fix_rounds"], 0)
+
+    def test_the_quality_table_sums_the_new_fields_and_shows_old_rows_as_unknown(self) -> None:
+        new = {"status": "pass", "passed": 3, "total": 3, "cost": 0.02, "adversarial_passed": 1,
+               "adversarial_total": 2, "crash_cases": 1, "regressions": 0, "hygiene_failed": 0, "spec_runs": 2}
+        failed = {**new, "status": "fail", "passed": 1, "crash_cases": 2, "regressions": 1}
+        old = {"status": "pass", "passed": 1, "total": 1, "cost": 0.01}
+        lines = run.quality_totals({"skill": [new, failed], "python": [new, old]})
+        self.assertEqual(lines[2], "| python | 4/4 | - | - | - | - | - | 0.0150 |")
+        self.assertEqual(lines[3], "| skill | 4/6 | 2/4 | 3 | 1 | 0 | 4 | 0.0400 |")
+
+
+class TreeRunTests(unittest.TestCase):
+    def test_a_tree_run_starts_from_the_start_tree_and_keeps_every_source_file(self) -> None:
+        agent = ["sh", "-c", "mkdir -p lib && echo 'x = 1' > lib/extra.py && cat lib/money.py > solution.py"]
+        args = Namespace(agent="pi", model="opencode-go/deepseek-v4.1-flash", timeout=30, sandbox="docker",
+                         pass_env=[], image="unused", pi_auth=None, chroot_root=None)
+        graded: list[list[Path]] = []
+
+        def fake_grade(solution: Path, task: str, arm: str, *rest: object) -> dict:
+            graded.append(run.solution_files(solution.parent, "py"))
+            return {"status": "pass", "passed": 1, "total": 1, "failure": None, "code": None}
+
+        with (tempfile.TemporaryDirectory() as tmp,
+              patch.object(run, "TASKS", Path(tmp) / "tasks"),
+              patch.object(run, "agent_command", return_value=agent),
+              patch.object(run, "docker_prefix", return_value=[]),
+              patch.object(run, "remove_container"),
+              patch.object(run, "grade", fake_grade)):
+            task = Path(tmp) / "tasks" / "tree"
+            (task / "start" / "py" / "lib").mkdir(parents=True)
+            (task / "start" / "py" / "lib" / "money.py").write_text("print(1)\n", encoding="utf-8")
+            (task / "reference" / "py").mkdir(parents=True)
+            (task / "hidden").mkdir()
+            (task / "task.md").write_text("task\n", encoding="utf-8")
+            results, scratch = Path(tmp) / "results", Path(tmp) / "scratch"
+            results.mkdir()
+            scratch.mkdir()
+            row = run.one_run(args, results, scratch, "tree", "python", 1)
+            kept = sorted(str(path.relative_to(results / "tree-python-1")) for path in
+                          (results / "tree-python-1" / "solution").rglob("*.py"))
+
+        self.assertEqual(graded, [[Path("lib/extra.py"), Path("lib/money.py"), Path("solution.py")]])
+        self.assertEqual(kept, ["solution/lib/extra.py", "solution/lib/money.py", "solution/solution.py"])
+        self.assertEqual((row["status"], row["regressions"], row["crash_cases"]), ("pass", 0, 0))
+
+
 class StartParityTests(unittest.TestCase):
     def test_a_go_start_that_grades_unlike_the_python_start_fails_the_check(self) -> None:
         outcomes = {("t2", "typed-python"): ("fail", 0, "check"), ("t2", "go"): ("fail", 0, "check"),
@@ -1066,8 +1142,11 @@ class CaseCommandTests(unittest.TestCase):
     def test_every_task_has_a_reference_per_language_and_cases(self) -> None:
         for task in sorted(path for path in run.TASKS.iterdir() if path.is_dir()):
             with self.subTest(task=task.name):
-                for name in ("task.md", "reference.agc", "reference.py"):
-                    self.assertTrue((task / name).is_file(), name)
+                self.assertTrue((task / "task.md").is_file())
+                for ext in ("agc", "py"):
+                    reference = (task / "reference" / ext / f"solution.{ext}" if run.tree_task(task.name)
+                                 else task / f"reference.{ext}")
+                    self.assertTrue(reference.is_file(), reference)
                 cases = sorted((task / "hidden").glob("*.in"))
                 self.assertTrue(cases)
                 for case in cases:
@@ -1705,6 +1784,53 @@ class DockerGradingTests(unittest.TestCase):
                           ("pass", 1, None, None), ("fail", 0, "check", "vet")])
         # go vet stops at the first type error of the t2 start; the build lists all six.
         self.assertEqual(results[-1]["check_errors"], 6)
+
+    def test_a_tree_solution_grades_with_its_modules_and_counts_case_tiers(self) -> None:
+        if run.go_probe(run.DEFAULT_IMAGE)[0] != 0:
+            self.skipTest("evaluation image has no Go")
+        run.ensure_go(run.DEFAULT_IMAGE)
+        python = {"solution.py": "import sys\n\nfrom calc.double import double\n\nprint(double(int(sys.stdin.read())))\n",
+                  "calc/__init__.py": "",
+                  "calc/double.py": "def double(n: int) -> int:\n    return n * 2\n",
+                  "skills/ignored.py": "this is not python\n"}
+        go = {"solution.go": 'package main\n\nimport (\n\t"fmt"\n\t"io"\n\t"os"\n\t"strconv"\n\t"strings"\n\n'
+                             '\t"solution/calc"\n)\n\nfunc main() {\n\tdata, _ := io.ReadAll(os.Stdin)\n'
+                             '\tn, err := strconv.Atoi(strings.TrimSpace(string(data)))\n\tif err != nil {\n'
+                             '\t\tpanic(err)\n\t}\n\tfmt.Println(calc.Double(n))\n}\n',
+              "calc/calc.go": "package calc\n\nfunc Double(n int) int { return n * 2 }\n"}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            task = root / "tasks" / "tree"
+            hidden = task / "hidden"
+            hidden.mkdir(parents=True)
+            (task / "reference").mkdir()
+            for name, case, expected in (("01", "3", "6"), ("reg-01", "4", "8"), ("hyg-01", "5", "10"),
+                                         ("adv-01", "boom", "error"), ("adv-02", "7", "14")):
+                (hidden / f"{name}.in").write_text(case + "\n", encoding="utf-8")
+                (hidden / f"{name}.out").write_text(expected + "\n", encoding="utf-8")
+            args = Namespace(sandbox="docker", image=run.DEFAULT_IMAGE, chroot_root=None)
+            results = {}
+            for arm, files in (("typed-python", python), ("python", python), ("go", go),
+                               ("typed-python-bad", {**python, "calc/double.py": "def double(n: int) -> str:\n    return n\n"})):
+                work = root / arm
+                for name, text in files.items():
+                    (work / name).parent.mkdir(parents=True, exist_ok=True)
+                    (work / name).write_text(text, encoding="utf-8")
+                scratch = root / f"{arm}-scratch"
+                scratch.mkdir()
+                with patch.object(run, "TASKS", root / "tasks"):
+                    solution = work / f"solution.{run.ARMS[arm.removesuffix('-bad')]}"
+                    results[arm] = run.grade(solution, "tree", arm.removesuffix("-bad"), args, scratch, arm)
+
+        for arm in ("typed-python", "python", "go"):
+            with self.subTest(arm=arm):
+                row = results[arm]
+                self.assertEqual((row["status"], row["passed"], row["total"]), ("pass", 3, 3))
+                self.assertEqual((row["adversarial_passed"], row["adversarial_total"], row["crash_cases"]), (1, 2, 1))
+                self.assertEqual((row["regressions"], row["hygiene_failed"]), (0, 0))
+        # mypy checks the module that solution.py imports, not only solution.py.
+        self.assertEqual((results["typed-python-bad"]["status"], results["typed-python-bad"]["failure"]),
+                         ("fail", "check"))
 
     def test_an_ecosystem_task_builds_with_the_baked_sqlite_module_offline_and_nothing_else(self) -> None:
         if run.go_probe(run.DEFAULT_IMAGE)[0] != 0:
