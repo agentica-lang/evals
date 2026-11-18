@@ -1,0 +1,6 @@
+job concurrency=2 request_timeout_ms=5000 deadline_ms=1200 hedge_ms=0 retries=0 backoff_ms=50
+url a ok:1
+url b hang
+url c delay:300:ok:3
+url d delay:2500:ok:4
+url e ok:5

@@ -1,0 +1,7 @@
+1 ok 1
+2 error deadline
+3 ok 3
+4 error deadline
+5 error deadline
+ok 2 of 5
+exit 0

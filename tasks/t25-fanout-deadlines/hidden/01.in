@@ -1,0 +1,11 @@
+job concurrency=4 request_timeout_ms=500 deadline_ms=4000 hedge_ms=0 retries=0 backoff_ms=50
+url a ok:1
+url b status:404
+url c body:hello
+url d ok:-4
+url e body:{"value":"7"}
+url f body:{"value":2.0}
+url g body:{"other":1,"value":12}
+url h body:[1]
+url i status:204
+check requests
