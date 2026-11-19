@@ -1,11 +1,11 @@
 # Benchmark twins
 
 `bench/` times agentica's benchmark programs against a Python and a Go twin of
-each, to compare the speed of the three. The Agentica programs and the Python
-twins come from agentica's `benchmarks/` at the pinned commit
-(`AGENTICA_COMMIT`, the 0.35.0 tag; agentica's master no longer has the Python
-twins), fetched into `.cache/` like the sources. The Go twins are in
-`bench/go/`, one file per program, and print the same.
+each, to compare the speed of the three. The Agentica programs come from
+agentica's `benchmarks/` at the pinned commit (`AGENTICA_COMMIT`, the 0.35.0
+tag), fetched into `.cache/` like the sources. The twins are in `bench/python/`
+and `bench/go/`, one file per program, and print the same. Agentica's master no
+longer has the Python twins, so they live here.
 
 ```sh
 make bench                  # median of 5 runs after one warm-up run, size 5
