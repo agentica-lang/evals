@@ -193,7 +193,7 @@ class SupplyChainTests(unittest.TestCase):
             return run.release_binary()
 
     def test_a_wrong_sha_stops_and_leaves_nothing_and_the_right_one_extracts_the_binary(self) -> None:
-        payload = release_archive(b"#!/bin/sh\necho 0.34.1\n")
+        payload = release_archive(f"#!/bin/sh\necho {run.AGENTICA_VERSION}\n".encode())
         right = hashlib.sha256(payload).hexdigest()
         with tempfile.TemporaryDirectory() as directory:
             cache = Path(directory)
@@ -205,7 +205,7 @@ class SupplyChainTests(unittest.TestCase):
             self.assertIn("does not match its pinned SHA-256", str(raised.exception))
             self.assertEqual(left_after_failure, [])
             self.assertEqual(binary, cache / f"agentica-{run.AGENTICA_VERSION}-{right[:12]}" / "agentica")
-            self.assertEqual(binary.read_bytes(), b"#!/bin/sh\necho 0.34.1\n")
+            self.assertEqual(binary.read_bytes(), f"#!/bin/sh\necho {run.AGENTICA_VERSION}\n".encode())
             self.assertEqual(sorted(path.name for path in cache.iterdir()),
                              sorted([run.AGENTICA_ARCHIVE, binary.parent.name]))
 
@@ -243,12 +243,12 @@ class SupplyChainTests(unittest.TestCase):
             (runtime / "bin").mkdir(parents=True)
             (runtime / "bin" / "agentica").write_bytes(b"binary")
             args = Namespace(agentica=Path("/x/agentica"), agentica_src=None)
-            with (patch.object(run, "RUNTIME", runtime), patch.object(run, "agentica_version", return_value="0.34.1"),
+            with (patch.object(run, "RUNTIME", runtime), patch.object(run, "agentica_version", return_value=run.AGENTICA_VERSION),
                   patch.object(run, "git_output", return_value="abc123")):
                 used = run.agentica_info(args, True)
                 unused = run.agentica_info(args, False)
 
-        self.assertEqual(used, {"agentica_version": "0.34.1", "agentica_commit": "abc123",
+        self.assertEqual(used, {"agentica_version": run.AGENTICA_VERSION, "agentica_commit": "abc123",
                                 "agentica_binary_sha256": hashlib.sha256(b"binary").hexdigest(),
                                 "agentica_override": True, "agentica_src_override": False})
         self.assertEqual((unused["agentica_version"], unused["agentica_binary_sha256"]), (None, None))

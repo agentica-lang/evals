@@ -25,10 +25,10 @@ TASKS = EVAL / "tasks"
 CACHE = EVAL / ".cache"
 # The pinned Agentica: the release binary the agentica arms run, and the commit of its tag, which gives the skill,
 # the grammar, the library pages and the examples. --agentica and --agentica-src replace them.
-AGENTICA_VERSION = "0.34.1"
+AGENTICA_VERSION = "0.35.0"
 AGENTICA_ARCHIVE = f"agentica-{AGENTICA_VERSION}-linux-x86_64.tar.gz"
-AGENTICA_ARCHIVE_SHA256 = "f1c7caa3947ac5947a87566febb1c4b06f05793bd4f03752b21fd416b44b73db"
-AGENTICA_COMMIT = "d73c9dc5b69e813e783b006fff203760488f3f47"
+AGENTICA_ARCHIVE_SHA256 = "379b0494b84c89b121d089fab9b21879e939a4dd7e89661f6be34e70f13f6322"
+AGENTICA_COMMIT = "99fcf2e7dc9d953939387dcd3858a7c732e95476"
 AGENTICA_REPO = "https://github.com/agentica-lang/agentica"
 SOURCE_PATHS = [".agents/skills/agentica-programming", "docs/grammar", "site/content/library", "examples"]
 # The Agentica sources and the runtime folder (bin/agentica) copied into each agentica workspace.

@@ -1,7 +1,7 @@
 """Times the Agentica benchmark programs against their Python and Go twins, in the evaluation image.
 
-The Agentica programs and the Python twins come from agentica's benchmarks/ at the pinned commit (AGENTICA_COMMIT,
-the 0.34.1 tag), the binary is the pinned release, and the Go twins are in bench/go/. Every runner runs in one
+The Agentica programs come from agentica's benchmarks/ at the pinned commit (AGENTICA_COMMIT, the 0.35.0 tag), the
+binary is the pinned release, and the Python and Go twins are in bench/python/ and bench/go/. Every runner runs in one
 container of the evaluation image with no network, so all of them see the same machine. The table is printed;
 --check runs each program once and only reports whether the outputs match."""
 
@@ -19,7 +19,7 @@ sys.path.insert(0, str(BENCH.parent))
 
 import run  # noqa: E402  (the runner of the evals, for the pinned Agentica)
 
-BENCH_PATHS = ["benchmarks/programs", "benchmarks/python"]
+BENCH_PATHS = ["benchmarks/programs"]
 # The versions the numbers are for: Go is pinned by the Dockerfile (GO_VERSION, with its checksum); Python is the
 # python3 of the base image, pinned by digest (Debian trixie).
 PYTHON_VERSION = "3.13"
@@ -45,7 +45,7 @@ def stage(directory: Path, names: list[str], size: int) -> None:
             raise SystemExit(f"{name}.agc has no `def scale` returning 1")
         (directory / "programs" / f"{name}.agc").write_text(scaled, encoding="utf-8")
         twin = f"{name.replace('-', '_')}.py"
-        shutil.copyfile(sources / "benchmarks" / "python" / twin, directory / "python" / twin)
+        shutil.copyfile(BENCH / "python" / twin, directory / "python" / twin)
         shutil.copyfile(BENCH / "go" / f"{name}.go", directory / "go" / f"{name}.go")
     for path, text in HELLO.items():
         (directory / path).write_text(text, encoding="utf-8")
