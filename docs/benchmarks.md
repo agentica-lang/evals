@@ -3,7 +3,7 @@
 `bench/` times agentica's benchmark programs against a Python and a Go twin of
 each, to compare the speed of the three. The Agentica programs and the Python
 twins come from agentica's `benchmarks/` at the pinned commit
-(`AGENTICA_COMMIT`, the 0.34.1 tag; agentica's master no longer has the Python
+(`AGENTICA_COMMIT`, the 0.35.0 tag; agentica's master no longer has the Python
 twins), fetched into `.cache/` like the sources. The Go twins are in
 `bench/go/`, one file per program, and print the same.
 
@@ -18,7 +18,7 @@ make image                  # rebuild the evaluation image (bench/run.py builds 
 runs `bench/measure.py` in one container of the evaluation image: no network,
 every capability dropped, no new privileges, at most 512 processes, `--init`,
 and every core of the machine (no CPU limit, as a user's program would run). The
-versions are fixed: Agentica 0.34.1 (the release), Go 1.27.4 (`GO_VERSION` of
+versions are fixed: Agentica 0.35.0 (the release), Go 1.27.4 (`GO_VERSION` of
 the Dockerfile, checked by its SHA-256) and Python 3.13 (the `python3` of the
 digest-pinned Debian trixie base, 3.13.5 when written); `measure.py` prints them
 and stops when the image has another Python minor or Go version.

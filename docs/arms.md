@@ -28,9 +28,9 @@ between arms with that in mind.
 
 ## The Agentica under test
 
-By default a run uses Agentica 0.34.1: the `linux-x86_64` release archive,
+By default a run uses Agentica 0.35.0: the `linux-x86_64` release archive,
 downloaded once into `.cache/` and checked against the SHA-256 pinned in
-`run.py`, and a sparse checkout of the commit of the `0.34.1` tag for the skill,
+`run.py`, and a sparse checkout of the commit of the `0.35.0` tag for the skill,
 the grammar, the library pages and the examples. `.cache/` is not versioned. Two
 options replace them:
 

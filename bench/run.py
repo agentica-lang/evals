@@ -1,7 +1,7 @@
 """Times the Agentica benchmark programs against their Python and Go twins, in the evaluation image.
 
 The Agentica programs and the Python twins come from agentica's benchmarks/ at the pinned commit (AGENTICA_COMMIT,
-the 0.34.1 tag), the binary is the pinned release, and the Go twins are in bench/go/. Every runner runs in one
+the 0.35.0 tag), the binary is the pinned release, and the Go twins are in bench/go/. Every runner runs in one
 container of the evaluation image with no network, so all of them see the same machine. The table is printed;
 --check runs each program once and only reports whether the outputs match."""
 
